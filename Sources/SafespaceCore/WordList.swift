@@ -1,0 +1,46 @@
+import Foundation
+
+/// Short, common, easy-to-type English words for passphrases.
+/// Entropy is always computed from `words.count`, so the list can grow safely.
+public enum WordList {
+    public static let words: [String] = {
+        var seen = Set<String>()
+        return raw.split(whereSeparator: \.isWhitespace)
+            .map { String($0) }
+            .filter { seen.insert($0).inserted }
+    }()
+
+    private static let raw = """
+    able acid acorn actor adapt admit adobe adult agent agile aging agree ahead aisle alarm album alert algae alien
+    alike alley alloy almond aloft alpha amber amino amuse angel anger angle ankle apple apron arena argue armor
+    aroma arrow ashes aspen atlas attic audio audit avoid awake award bacon badge bagel baker balmy bamboo banjo
+    barge baron basil basin batch beach beast begin being bench berry bike bingo birch bison blade blank blaze
+    blend bliss block bloom blush board boast bonus boost booth boxer brain brake brass brave bread brick bride
+    brief brisk broom brush buddy buggy bunny cabin cable cacao cadet camel canal candy canoe canyon cargo carol
+    carpet catch cedar chalk charm chase cheap check cheek chess chief child chili chirp choir chord cider cinema
+    civic claim clamp clash class clean clerk cliff climb clock cloud clover coach coast cobra cocoa comet coral
+    cotton couch cough cover crane crate crisp crowd crown crumb crust cubic curve cycle daily dairy daisy dance
+    delta denim depth diary dingo disco dizzy dolphin donut dough draft drama dream dress drift drill drive
+    eagle early earth easel eaten ebony echo elbow elder elite ember empty enjoy entry equal error essay event
+    exact exile extra fable fairy faith false fancy feast fence ferry fetch fever fiber field fifty final flame
+    flash fleet flint float flock floor flour fluid flute focus foggy forest forge fossil frame fresh frost fruit
+    fudge funny gamma gauge gecko giant ginger given glade glass globe glove goose gourd grace grain grape grass
+    gravy great green grill grove guard guest guide habit happy harbor harp hatch haven hazel heart hedge hello
+    heron hippo hobby honey horse hotel humid humor husky icing igloo image index inlet input irony island ivory
+    jelly jewel joint jolly judge juice jumbo jungle kayak kettle kiosk kite kiwi koala label ladder lake lemon
+    level lilac linen lion llama lobby local lodge logic lotus lucky lunar lunch lyric magic mango maple march
+    marsh mason medal melon mercy merry metal meter mild mimic minor mocha model moose motor mouse movie muffin
+    music nacho navy nectar nerve noble noodle north novel nutmeg oasis ocean olive omega onion opera orbit
+    orchid otter outer oxide paddle panda panel paper parade party pasta patch peach pearl pedal penny pepper
+    piano pilot pixel pizza plaid plane plaza plum polar pond poppy porch pouch power prism prize proud puffin
+    pulse pumpkin punch puppy quail quartz queen quest quick quiet quilt quota rabbit radar radio rainy ranch
+    raven razor ready rebel relax remix rhino ridge rival river roast robin robot rocket rodeo royal ruby rugby
+    ruler rusty saddle salad salmon salsa sandy satin sauce scale scarf scout seed shade shark shelf shell shine
+    shiny shore silk silver siren skate sketch skunk slate sleek slope smile smoke snack snail solar sonic spark
+    spice spine spoon spray squid stamp steam steel stone storm stove straw sugar sunny super swamp sweet swift
+    table taco talon tango teapot tempo tender thorn thumb tiger timber toast token topaz torch totem tower trail
+    treat trend tribe tulip tuna tunnel turbo twist ultra umbra uncle union unity upper urban usage utter valley
+    vapor vault velvet venue verse video vigor vinyl viola viper visor vivid vocal voice wafer wagon waltz water
+    whale wheat whisk widow willow window winter wizard wagon woven yacht yeast yield yodel young zebra zesty zippy
+    """
+}

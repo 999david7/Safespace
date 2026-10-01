@@ -1,0 +1,9 @@
+.build/
+build/
+.build-log.txt
+.swiftpm/
+*.xcodeproj
+xcuserdata/
+.DS_Store
+*.safespace
+*.safespace.bak

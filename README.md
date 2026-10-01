@@ -1,0 +1,166 @@
+<div align="center">
+
+# Safespace
+
+**A private password manager for macOS.** Native SwiftUI, fully offline, AES-256 encrypted,
+with Touch ID unlock and a generator that actually gives you control.
+
+![macOS 14+](https://img.shields.io/badge/macOS-14%2B-0b0b0b?style=flat-square)
+![Swift 5.10](https://img.shields.io/badge/Swift-5.10-0b0b0b?style=flat-square)
+![AES-256-GCM](https://img.shields.io/badge/Crypto-AES--256--GCM-ffd23f?style=flat-square&labelColor=0b0b0b)
+![No network](https://img.shields.io/badge/Network-none-0b0b0b?style=flat-square)
+![MIT](https://img.shields.io/badge/License-MIT-0b0b0b?style=flat-square)
+
+![Safespace vault](docs/screenshots/vault.png)
+
+</div>
+
+## Why
+
+Most password managers are a subscription and a sync service you have to trust. Safespace is one
+encrypted file on your Mac, one app, and no accounts — with an interface worth looking at.
+
+The interface is a desk of quiet paper widgets: your logins, the selected login with one-click
+copy, a vault-health card that flags weak and reused passwords, and the generator.
+
+## Features
+
+- **Encrypted vault** — AES-256-GCM, key derived from your master password with PBKDF2-HMAC-SHA256
+  (600,000 rounds, random 32-byte salt). Titles, usernames, URLs and notes are all inside the
+  ciphertext.
+- **Touch ID unlock** — the vault key is sealed to this Mac's Secure Enclave and released only after
+  a fingerprint match. Your master password always works as a fallback.
+- **Password generator with real options** — length 4–128, uppercase/lowercase/digits/symbols, your
+  own symbol set, skip look-alike characters (`I l 1 O 0`), guarantee one of each selected set, plus
+  a passphrase mode (word count, separator, capitalization, optional number) and a live
+  strength/entropy readout.
+- **Health at a glance** — filters and warnings for weak and reused passwords, and a vault-health
+  line across the bottom.
+- **Auto-lock** — after inactivity, when the Mac sleeps, and when the screen locks.
+- **Clipboard safety** — copies clear on a timer (10s–2min), are marked concealed so clipboard
+  managers skip them, and are wiped when you lock or quit.
+- **Safe storage** — one file, mode `0600`, written atomically, previous version kept as `.bak`.
+- **Offline by design** — no network code, no sync, no telemetry, no account.
+
+## Screenshots
+
+| Lock screen | Generator |
+| --- | --- |
+| ![Lock screen](docs/screenshots/lock.png) | ![Generator](docs/screenshots/generator.png) |
+
+| Editor | First run |
+| --- | --- |
+| ![Editor](docs/screenshots/editor.png) | ![Setup](docs/screenshots/setup.png) |
+
+The interface is monochrome and editorial: paper-white surfaces, hairline rules, square corners,
+ultra-thin condensed headlines and tracked uppercase labels, with yellow and red as the only
+accents. Dark mode ships with it — toggle it in the header or in Settings → General.
+
+## Install
+
+Requires **macOS 14 or later**.
+
+### Download
+
+Grab **[Safespace.dmg](https://github.com/999david7/Safespace/releases/latest/download/Safespace.dmg)** from the latest
+release, open it and drag **Safespace** into **Applications**.
+
+### Build from source
+
+Needs a Swift toolchain (Xcode or the Command Line Tools).
+
+```bash
+git clone https://github.com/999david7/Safespace.git Safespace-for-Mac
+cd Safespace-for-Mac
+scripts/build-app.sh --install     # builds and copies to /Applications
+```
+
+Leave off `--install` to get `build/Safespace.app` without touching `/Applications`.
+
+The app is **ad-hoc signed, not notarized**, so Gatekeeper complains on first launch. Right-click the
+app and choose **Open** once. On recent macOS versions you may instead have to allow it under
+System Settings → Privacy & Security → **Open Anyway**.
+
+## Usage
+
+| Shortcut | Action |
+| --- | --- |
+| `⌘N` | New login |
+| `⌘E` | Edit the selected login |
+| `⌘F` | Focus search |
+| `⇧⌘G` | Password generator |
+| `⌘L` | Lock the vault |
+| `⌘,` | Settings |
+
+Settings covers auto-lock timing, clipboard clearing, appearance, Touch ID, and changing your master
+password. **Settings → General → Show in Finder** reveals the vault file so you can back it up — it
+stays encrypted wherever you copy it.
+
+> [!WARNING]
+> There is no password recovery. If you forget your master password, the data cannot be decrypted by
+> anyone, including you.
+
+## How it works
+
+```
+Sources/SafespaceCore/   crypto, storage, generator, strength estimation (UI-free, unit tested)
+Sources/Safespace/       SwiftUI app: vault, detail/editor panels, generator, Touch ID, clipboard
+Tests/                   Swift Testing suite for the core
+scripts/                 app bundling and icon rendering
+```
+
+The vault file lives at `~/Library/Application Support/Safespace/vault.safespace` and holds JSON
+with `version`, `kdf`, `iterations`, `salt` and `ciphertext`. The ciphertext is an AES-GCM box
+(nonce ‖ ciphertext ‖ tag); the header fields are authenticated as associated data, so they can't be
+tampered with. Every save uses a fresh nonce, and changing the master password re-encrypts the vault
+under a new salt.
+
+Touch ID adds `touchid.enrollment` next to the vault: a Secure Enclave P-256 key created with
+`.biometryCurrentSet`, plus the vault key sealed to it via ECDH → HKDF-SHA256 → AES-GCM. The enclave
+refuses to use that key without a fingerprint, the file is useless on any other Mac, and adding or
+removing fingerprints invalidates it (Safespace then turns Touch ID unlock off and asks for your
+password). No Apple developer account or keychain entitlement needed.
+
+See [SECURITY.md](SECURITY.md) for the threat model, including what this does **not** protect
+against.
+
+## Development
+
+```bash
+swift build      # build
+swift test       # run the core tests
+swift run        # run against your real vault
+```
+
+Preview any screen with sample data in a temporary vault, without touching your own (debug builds
+only):
+
+```bash
+SAFESPACE_DEMO=vault swift run      # also: stage, generator, editor, locked, setup
+```
+
+<details>
+<summary>Building with only the Command Line Tools installed</summary>
+
+Recent Command Line Tools SDKs declare SwiftUI's `@State` as a macro whose plugin ships only with
+Xcode, which breaks `swift build`. `scripts/build-app.sh` detects this and falls back to the newest
+SDK that works. For plain `swift build` / `swift test`, set it yourself:
+
+```bash
+export SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk
+```
+
+Run `swift build` before `swift test`, otherwise the test macros may fail to load.
+
+</details>
+
+Contributions welcome — see [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## Not included
+
+No sync, no browser autofill, no import/export, no sharing. Those need either a server or a browser
+extension, and both are bigger trust decisions than this app currently asks you to make.
+
+## License
+
+[MIT](LICENSE) © 2026 David Winkler
