@@ -5,7 +5,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT="$(pwd)"
 APP="$ROOT/build/Safespace.app"
-VERSION="1.0.0"
+VERSION="${SAFESPACE_VERSION:-1.1.0}"
 
 # With only the Command Line Tools installed, the newest SDKs declare SwiftUI's @State as a
 # macro whose plugin ships only with Xcode. If the default build fails, try older SDKs.
@@ -36,16 +36,15 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/Safespace"
 
-echo "→ Rendering icon…"
+echo "→ Building icon…"
 ICONSET="$ROOT/build/AppIcon.iconset"
 rm -rf "$ICONSET" && mkdir -p "$ICONSET"
-swift "$ROOT/scripts/make-icon.swift" "$ROOT/build/AppIcon-1024.png"
 for s in 16 32 128 256 512; do
-  sips -z $s $s "$ROOT/build/AppIcon-1024.png" --out "$ICONSET/icon_${s}x${s}.png" >/dev/null
-  sips -z $((s*2)) $((s*2)) "$ROOT/build/AppIcon-1024.png" --out "$ICONSET/icon_${s}x${s}@2x.png" >/dev/null
+  sips -z $s $s "$ROOT/Resources/AppIcon.png" --out "$ICONSET/icon_${s}x${s}.png" >/dev/null
+  sips -z $((s*2)) $((s*2)) "$ROOT/Resources/AppIcon.png" --out "$ICONSET/icon_${s}x${s}@2x.png" >/dev/null
 done
 iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/AppIcon.icns"
-rm -rf "$ICONSET" "$ROOT/build/AppIcon-1024.png"
+rm -rf "$ICONSET"
 
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>

@@ -28,7 +28,7 @@ indistinguishable by design.
 
 ## What this does not protect against
 
-- **A compromised Mac.** While the vault is unlocked, the key and decrypted entries live in process
+- **A compromised Mac or PC.** While the vault is unlocked, the key and decrypted entries live in process
   memory. Swift strings can't be reliably wiped, so memory scraping by malware or another process
   with debug rights defeats the app.
 - **A forgotten master password.** There is no recovery and no backdoor.

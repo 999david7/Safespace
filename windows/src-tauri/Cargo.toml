@@ -1,0 +1,23 @@
+[package]
+name = "safespace"
+version = "1.1.0"
+description = "Safespace: a private, offline password manager"
+authors = ["David Winkler"]
+license = "MIT"
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+arboard = { version = "3.4", default-features = false }
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true

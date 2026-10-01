@@ -1,0 +1,117 @@
+name: Release
+
+# Push a tag like v1.1.0 to build Safespace.dmg (macOS) and Safespace-Setup.exe (Windows)
+# and publish them as a GitHub release.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  macos:
+    name: macOS DMG
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Test
+        run: swift build --build-tests && swift test --skip-build
+
+      - name: Build app
+        run: SAFESPACE_VERSION="${GITHUB_REF_NAME#v}" scripts/build-app.sh
+
+      - name: Build DMG
+        run: scripts/make-dmg.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: build/Safespace.dmg
+
+  windows:
+    name: Windows installer
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: windows
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check version matches tag
+        shell: bash
+        run: |
+          version=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          [[ "v$version" == "$GITHUB_REF_NAME" ]] || { echo "tauri.conf.json is $version but the tag is $GITHUB_REF_NAME"; exit 1; }
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: windows/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: windows/src-tauri
+
+      - run: npm ci
+      - run: npm test
+
+      - name: Build installer
+        run: npx tauri build
+
+      - name: Collect
+        shell: bash
+        run: |
+          mkdir -p ../dist
+          cp src-tauri/target/release/bundle/nsis/*-setup.exe ../dist/Safespace-Setup.exe
+          cp src-tauri/target/release/safespace.exe ../dist/Safespace-Portable.exe
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: dist/*.exe
+
+  release:
+    name: Publish release
+    needs: [macos, windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - run: ls -la dist
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          name: Safespace ${{ github.ref_name }}
+          files: |
+            dist/Safespace.dmg
+            dist/Safespace-Setup.exe
+            dist/Safespace-Portable.exe
+          body: |
+            ## Downloads
+
+            | | |
+            | --- | --- |
+            | **macOS 14+** | **Safespace.dmg** — open it and drag Safespace into Applications |
+            | **Windows 10/11** | **Safespace-Setup.exe** — installs for your user, no admin needed |
+            | Windows, no install | Safespace-Portable.exe — needs the WebView2 runtime (built into Windows 11) |
+
+            Both apps read and write the same encrypted vault format, so you can copy `vault.safespace`
+            between a Mac and a PC.
+
+            Neither build is code-signed by a paid certificate yet. On macOS right-click the app and choose
+            **Open** the first time. On Windows, SmartScreen may say "Windows protected your PC": click
+            **More info → Run anyway**.
+
+            ## What's new
+
+            - New app icon.
+            - **Safespace for Windows**: the same vault desk, generator, groups, health checks, auto-lock
+              and clipboard clearing. Copied passwords are kept out of Windows clipboard history and cloud sync.
