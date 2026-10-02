@@ -369,3 +369,54 @@ export function vaultHealth(entries) {
   const reused = new Set([...byPassword.values()].filter((ids) => ids.length > 1).flat());
   return { weak, reused };
 }
+
+// MARK: - Import
+
+/**
+ * Adds the logins and groups of an imported vault without losing anything here. Same rules as
+ * `VaultContents.merging` in the Mac app: groups match by id, then by name; a login with a known
+ * id replaces ours only if it was edited later; an identical copy of a login here is skipped.
+ */
+export function mergeVaults(current, imported) {
+  const groups = [...current.groups];
+  const entries = [...current.entries];
+  const summary = { added: 0, updated: 0, skipped: 0, groupsAdded: 0 };
+  const normalized = (name) => (name ?? "").trim().toLowerCase();
+
+  const groupMap = new Map();
+  for (const group of imported.groups) {
+    const match = groups.find((g) => g.id === group.id) ?? groups.find((g) => normalized(g.name) === normalized(group.name));
+    if (match) groupMap.set(group.id, match.id);
+    else {
+      groups.push(group);
+      groupMap.set(group.id, group.id);
+      summary.groupsAdded++;
+    }
+  }
+
+  const sameLogin = (a, b) => a.title === b.title && a.username === b.username && a.password === b.password && a.url === b.url;
+  for (const raw of imported.entries) {
+    const entry = { ...raw, groupID: raw.groupID ? groupMap.get(raw.groupID) ?? null : null };
+    const index = entries.findIndex((e) => e.id === entry.id);
+    if (index !== -1) {
+      if (entry.updatedAt > entries[index].updatedAt) {
+        entries[index] = entry;
+        summary.updated++;
+      } else summary.skipped++;
+    } else if (entries.some((e) => sameLogin(e, entry))) summary.skipped++;
+    else {
+      entries.push(entry);
+      summary.added++;
+    }
+  }
+  return { entries, groups, summary };
+}
+
+/** "Imported 12 logins · 1 new group · 3 already here" */
+export function importMessage({ added, updated, skipped, groupsAdded }) {
+  const changed = added + updated;
+  const parts = [`Imported ${changed} ${changed === 1 ? "login" : "logins"}`];
+  if (groupsAdded > 0) parts.push(`${groupsAdded} new ${groupsAdded === 1 ? "group" : "groups"}`);
+  if (skipped > 0) parts.push(`${skipped} already here`);
+  return parts.join(" · ");
+}

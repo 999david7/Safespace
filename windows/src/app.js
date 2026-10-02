@@ -2,7 +2,7 @@
 // A port of Sources/Safespace (SwiftUI) to plain DOM, with the same behaviour and look.
 
 import * as core from "./core.js";
-import { platform } from "./platform.js";
+import { pickVaultFile, platform } from "./platform.js";
 
 // MARK: - Helpers
 
@@ -321,7 +321,8 @@ function setupHTML() {
       <div class="field" style="margin-top:14px"><span class="eyebrow">Confirm</span>
         <input class="input" type="password" id="setup-confirm" placeholder="Repeat password"></div>
       <div id="setup-meter" style="margin-top:18px">${strengthMeter(0, { showBits: false, dim: true })}</div>
-      <div class="message" id="setup-message">There is no password recovery. Keep it somewhere safe.</div>`,
+      <div class="message" id="setup-message">There is no password recovery. Keep it somewhere safe.</div>
+      <button class="link-button" style="margin-top:16px" data-action="open-existing" title="Use a vault.dat or vault.safespace from a backup or another computer">Open an existing vault file…</button>`,
     footer: `<div class="cells top"><button class="cell prominent h44" data-action="create-vault" id="setup-create" disabled>Create vault</button></div>`,
   });
 }
@@ -361,6 +362,24 @@ async function createVault() {
     message.className = "message error";
     message.textContent = error.message;
     setupValidation();
+  }
+}
+
+/** First run: use a vault file from a backup or another computer as this PC's vault. */
+async function openExistingVault() {
+  if (state.screen !== "setup" || state.busy) return;
+  const file = await pickVaultFile();
+  if (!file) return;
+  try {
+    core.readHeader(file.text); // refuses anything that isn't a Safespace vault
+    await platform.adoptVault(file.text);
+    state.screen = "locked";
+    render();
+    $("#unlock-message").textContent = `Opened ${file.name}. Enter its master password.`;
+  } catch (error) {
+    const message = $("#setup-message");
+    message.className = "message error";
+    message.textContent = error.code === "corruptFile" ? `${file.name} isn't a Safespace vault file.` : String(error.message ?? error);
   }
 }
 
@@ -1014,6 +1033,11 @@ function openSettings(tab = "general") {
             <div class="setting"><div class="name">Lock after inactivity</div>${select("autoLockMinutes", LOCK_OPTIONS)}</div>
             <div class="setting">${toggleHTML("lockOnSleep", prefs.get("lockOnSleep"), "Lock when this PC sleeps")}</div>
             <div class="setting"><div class="name">Clear copied passwords after</div>${select("clipboardClearSeconds", CLEAR_OPTIONS)}</div>
+            <div class="setting"><div><div class="name">Import logins</div>
+                <div class="hint">From another Safespace vault: vault.dat, or vault.safespace from an older version. Logins you already have are kept.</div></div>
+              <button class="cell h32" style="flex:0 0 140px;border:1px solid var(--line-strong);border-radius:2px" id="import-choose"
+                ${state.screen === "unlocked" ? "" : 'disabled title="Unlock your vault first"'}>Choose file…</button></div>
+            <div id="import-area"></div>
             <div class="setting"><div><div class="name">Vault file</div><div class="hint selectable">${esc(location)}</div>
                 <div class="hint">Fully encrypted. Copy it somewhere safe to back it up.</div></div>
               <button class="cell h32" style="flex:0 0 140px;border:1px solid var(--line-strong);border-radius:2px" data-action="reveal-vault">Show in Explorer</button></div>
@@ -1043,6 +1067,61 @@ function openSettings(tab = "general") {
       <div class="cells bottom"><button class="cell h34 ${tab === "general" ? "selected" : ""}" data-tab="general">General</button>
         <button class="cell h34 ${tab === "security" ? "selected" : ""}" data-tab="security">Security</button></div>
       <div class="scroll">${body}</div>`;
+    if (tab === "general") drawImport();
+  }
+
+  let importFile = null;
+
+  function drawImport(message = "", tone = "") {
+    const area = $("#import-area", sheet);
+    if (!area) return;
+    area.innerHTML = importFile
+      ? `<div class="setting" style="flex-direction:column;align-items:stretch;gap:8px">
+          <input class="input" type="password" id="imp-password" placeholder="Master password for ${esc(importFile.name)}">
+          <div class="row" style="justify-content:space-between">
+            <div class="form-message ${tone}" id="imp-message" style="margin-top:0">${esc(message)}</div>
+            <div class="row"><button class="cell h34" style="flex:0 0 90px" id="imp-cancel">Cancel</button>
+              <button class="cell prominent h34" style="flex:0 0 110px" id="imp-submit">Import</button></div></div></div>`
+      : message
+        ? `<div class="form-message ${tone}" style="margin:0 0 4px">${esc(message)}</div>`
+        : "";
+    $("#imp-password", sheet)?.focus();
+  }
+
+  async function chooseImport() {
+    if (state.screen !== "unlocked") return;
+    const file = await pickVaultFile();
+    if (!file) return;
+    try {
+      core.readHeader(file.text);
+      importFile = file;
+      drawImport();
+    } catch (error) {
+      importFile = null;
+      drawImport(error.code === "corruptFile" ? `${file.name} isn't a Safespace vault file.` : String(error.message ?? error), "error");
+    }
+  }
+
+  async function runImport() {
+    const input = $("#imp-password", sheet);
+    if (!importFile || !input?.value || state.busy) return;
+    state.busy = true;
+    $("#imp-submit", sheet).disabled = true;
+    $("#imp-submit", sheet).textContent = "Importing";
+    try {
+      const opened = await core.decryptVault(importFile.text, input.value);
+      const merged = core.mergeVaults({ entries: state.entries, groups: state.groups }, opened);
+      await persist(merged.entries, merged.groups);
+      importFile = null;
+      const message = core.importMessage(merged.summary);
+      drawImport(message, "ok");
+      showToast(message);
+      refreshDesk();
+    } catch (error) {
+      drawImport(error.code === "wrongPassword" ? "Wrong password for that vault file." : String(error.message ?? error), "error");
+    } finally {
+      state.busy = false;
+    }
   }
 
   function validateChange() {
@@ -1093,6 +1172,12 @@ function openSettings(tab = "general") {
       prefs.set("lockOnSleep", !prefs.get("lockOnSleep"));
       target.outerHTML = toggleHTML("lockOnSleep", prefs.get("lockOnSleep"), "Lock when this PC sleeps");
     } else if (target.id === "cp-submit") changePassword();
+    else if (target.id === "import-choose") chooseImport();
+    else if (target.id === "imp-submit") runImport();
+    else if (target.id === "imp-cancel") {
+      importFile = null;
+      drawImport();
+    }
   });
   sheet.addEventListener("change", (event) => {
     const key = event.target.dataset.pref;
@@ -1106,6 +1191,7 @@ function openSettings(tab = "general") {
   });
   sheet.addEventListener("keydown", (event) => {
     if (event.key === "Enter" && event.target.id?.startsWith("cp-")) changePassword();
+    if (event.key === "Enter" && event.target.id === "imp-password") runImport();
   });
   draw();
 }
@@ -1264,6 +1350,7 @@ const actions = {
       updateEditorStatus();
     }),
   "reveal-vault": () => platform.revealVault(),
+  "open-existing": openExistingVault,
   "win-min": () => platform.minimize(),
   "win-max": () => platform.toggleMaximize(),
   "win-close": () => platform.close(),

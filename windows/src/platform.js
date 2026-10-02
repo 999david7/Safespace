@@ -12,6 +12,10 @@ function browserFallback() {
     vaultExists: async () => localStorage.getItem(KEY) !== null,
     readVault: async () => localStorage.getItem(KEY),
     writeVault: async (contents) => localStorage.setItem(KEY, contents),
+    adoptVault: async (contents) => {
+      if (localStorage.getItem(KEY) !== null) throw new Error("A vault already exists on this PC.");
+      localStorage.setItem(KEY, contents);
+    },
     revealVault: async () => {},
     copyText: async (text, clearAfter) => {
       await navigator.clipboard?.writeText(text).catch(() => {});
@@ -35,6 +39,7 @@ function appBridge() {
     vaultExists: () => invoke("vault_exists"),
     readVault: () => invoke("read_vault"),
     writeVault: (contents) => invoke("write_vault", { contents }),
+    adoptVault: (contents) => invoke("adopt_vault", { contents }),
     revealVault: () => invoke("reveal_vault"),
     copyText: (text, clearAfter) => invoke("copy_text", { text, clearAfter }),
     clearClipboard: () => invoke("clear_clipboard"),
@@ -46,3 +51,18 @@ function appBridge() {
 }
 
 export const platform = tauri ? appBridge() : browserFallback();
+
+/** Lets the user pick a vault file (vault.dat, or vault.safespace from older versions) and reads it. */
+export function pickVaultFile() {
+  return new Promise((resolve) => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = ".dat,.safespace,.bak,application/json";
+    input.addEventListener("change", async () => {
+      const file = input.files?.[0];
+      resolve(file ? { name: file.name, text: await file.text() } : null);
+    });
+    input.addEventListener("cancel", () => resolve(null));
+    input.click();
+  });
+}

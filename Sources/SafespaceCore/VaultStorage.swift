@@ -8,12 +8,15 @@ public struct VaultStorage: Sendable {
         self.url = url
     }
 
-    /// `~/Library/Application Support/Safespace/vault.safespace`
+    /// `~/Library/Application Support/Safespace/vault.dat`
     public static let `default` = VaultStorage(
         url: FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Safespace", isDirectory: true)
-            .appendingPathComponent("vault.safespace")
+            .appendingPathComponent("vault.dat")
     )
+
+    /// File name used by Safespace 1.0 and 1.1, before the vault became `vault.dat`.
+    public static let legacyFileName = "vault.safespace"
 
     public var backupURL: URL {
         url.appendingPathExtension("bak")
@@ -21,6 +24,31 @@ public struct VaultStorage: Sendable {
 
     public var exists: Bool {
         FileManager.default.fileExists(atPath: url.path)
+    }
+
+    /// Renames a vault left by an older version (`vault.safespace` and its `.bak`) to this
+    /// storage's file name. Does nothing when this vault already exists or there is no old one.
+    public func migrateLegacyFile() throws {
+        let fm = FileManager.default
+        let legacy = url.deletingLastPathComponent().appendingPathComponent(Self.legacyFileName)
+        guard !exists, legacy != url, fm.fileExists(atPath: legacy.path) else { return }
+        try fm.moveItem(at: legacy, to: url)
+        let legacyBackup = legacy.appendingPathExtension("bak")
+        if fm.fileExists(atPath: legacyBackup.path), !fm.fileExists(atPath: backupURL.path) {
+            try? fm.moveItem(at: legacyBackup, to: backupURL)
+        }
+    }
+
+    /// Makes `source` (a vault file from another Mac, a backup, an older version…) the vault here.
+    /// Refuses files that aren't a Safespace vault, and never replaces an existing vault.
+    public func adopt(_ source: URL) throws {
+        guard !exists else { throw VaultError.vaultExists }
+        let file = try VaultStorage(url: source).read()
+        guard file.version <= VaultFile.currentVersion else { throw VaultError.unsupportedVersion(file.version) }
+        guard file.kdf == VaultFile.kdfName, file.salt.count >= 16, file.iterations > 0 else {
+            throw VaultError.corruptFile
+        }
+        try write(file)
     }
 
     public func read() throws -> VaultFile {

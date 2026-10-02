@@ -117,6 +117,15 @@ struct SetupView: View {
                     .toggleStyle(WidgetToggleStyle())
                     .padding(.top, 14)
             }
+
+            Button("Open an existing vault file…", action: openExisting)
+                .buttonStyle(.plain)
+                .font(.mono(8.5, weight: .semibold))
+                .tracking(1.3)
+                .textCase(.uppercase)
+                .foregroundStyle(Theme.mute)
+                .help("Use a vault.dat or vault.safespace from a backup or another computer")
+                .padding(.top, 16)
         } footer: {
             Button(store.isBusy ? "Creating vault" : "Create vault", action: create)
                 .buttonStyle(CellButtonStyle(prominent: true, height: 44))
@@ -125,6 +134,15 @@ struct SetupView: View {
                 .overlay(alignment: .top) { Hairline() }
         }
         .onAppear { focus = .password }
+    }
+
+    private func openExisting() {
+        guard let url = VaultFilePicker.choose(prompt: "Use Vault") else { return }
+        do {
+            try store.adoptVault(from: url)
+        } catch {
+            self.error = error.localizedDescription
+        }
     }
 
     private func create() {
