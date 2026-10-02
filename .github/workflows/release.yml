@@ -128,7 +128,12 @@ jobs:
             **Open** the first time. On Windows, SmartScreen may say "Windows protected your PC": click
             **More info → Run anyway**.
 
-            ## What's new in 1.3
+            ## What's new in 1.3.1
+
+            - A new app icon on both macOS and Windows: a yellow padlock on an ink tile, in the
+              app's own colors, and much clearer at small sizes.
+
+            ## 1.3
 
             Opens vaults from the **original SafeSpace** (the earlier C++ app for Windows), on both
             Windows and macOS:
