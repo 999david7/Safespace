@@ -167,3 +167,30 @@ import Testing
     #expect(PasswordStrength(entropy: PasswordStrength.estimateEntropy(of: "aaaaaaaa")) <= .weak)
     #expect(PasswordStrength(entropy: PasswordStrength.estimateEntropy(of: "Rw3!nB8#qT5@zL1&mK7p")) == .veryStrong)
 }
+
+/// Written by the Windows app (windows/src/core.js). Both apps must read each other's vaults.
+private let windowsVaultFixture = #"""
+{
+  "ciphertext": "5XZcgslGm+KiHZ0BqhDKrZxk2KQel9y/uzqN4KSeg2YUB5knQswYynJZ6FJx0lCUWVFNJTB8yiwYC2lpTcwNmN/PiZUB2jr+at+QS35jajZeeq56iJi99+43LmPY5SojNSvugWogLP7awitCPjTUz3hWEWbXwIW57CVAmuFikY7+uZhtevOJBjaM1fE5XGUpetsKxIbBan0W0LAWCE2YGLMtikWX/420tSNro4TS1ZXpPUqUz/K1XggHNxNoAAuhULWPoEKq5jflVNsQx9HIoIZCs2wi26lcyQyIASHlK0WPXvD4p8HJP3QvZ+8/h8rpxaqc4h4upzHQSPcY7F68e8t7+CC32ETJtyy01l00rmVpYo2PbF8Aw0eToKc4W0N/NAdDFq0EPIPMajB9duJckzlwaf3bVA6gClxosaa6bqw8wLXbrrnEKZq/F1eC4x9lvKOWPmxyu9fsJsNzdHlu0/gO5Z7IFwVvA/CczUD0VaW8vS5QHFLUF+s7Hxb3XJpFOdeSs4aoTd0SL7KmLl3IUMDBNUO2dgGI/yc9zSkZa4/nU/y6CHnGhqGTPM16h/7/yK2+Z+V3omO0sC71jrfu0H+Trhv+0dIdi7mpP9IpmGNLUxOkwbgXQ/+Yi04tI2H51aJFK4RrUlk6jdNATZfttDzdQWq4Fz1o5FLoFuujOQ8pej5ybbgMScWDeKOgY1MAOD8XFFxNjFMxEKYNsUH/dELBsl+wTpYQa14=",
+  "iterations": 1000,
+  "kdf": "PBKDF2-HMAC-SHA256",
+  "salt": "burgEdwx1IVcsbj6LzjMsuyF0IE3oXp2YnhTVZ+zVXg=",
+  "version": 1
+}
+"""#
+
+@Test func opensVaultWrittenByWindowsApp() throws {
+    let file = try JSONDecoder().decode(VaultFile.self, from: Data(windowsVaultFixture.utf8))
+    let (_, contents) = try Vault.decryptContents(file, password: "windows-fixture")
+    #expect(contents.groups.map(\.name) == ["Work"])
+    #expect(contents.groups.first?.color == 0x3B7DD8)
+    #expect(contents.entries.count == 2)
+    let github = try #require(contents.entries.first)
+    #expect(github.title == "GitHub")
+    #expect(github.password == "tmfEzEgKeHwpBD9BUJff")
+    #expect(github.notes == "Ünïcode ✓")
+    #expect(github.favorite)
+    #expect(github.groupID == contents.groups.first?.id)
+    #expect(github.createdAt == Date(timeIntervalSinceReferenceDate: 781_000_000.5))
+    #expect(contents.entries[1].groupID == nil)
+}

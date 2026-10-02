@@ -2,10 +2,11 @@
 
 # Safespace
 
-**A private password manager for macOS.** Native SwiftUI, fully offline, AES-256 encrypted,
-with Touch ID unlock and a generator that actually gives you control.
+**A private password manager for macOS and Windows.** Fully offline, AES-256 encrypted, with Touch ID
+unlock on the Mac and a generator that actually gives you control.
 
 ![macOS 14+](https://img.shields.io/badge/macOS-14%2B-0b0b0b?style=flat-square)
+![Windows 10/11](https://img.shields.io/badge/Windows-10%20%7C%2011-0b0b0b?style=flat-square)
 ![Swift 5.10](https://img.shields.io/badge/Swift-5.10-0b0b0b?style=flat-square)
 ![AES-256-GCM](https://img.shields.io/badge/Crypto-AES--256--GCM-ffd23f?style=flat-square&labelColor=0b0b0b)
 ![No network](https://img.shields.io/badge/Network-none-0b0b0b?style=flat-square)
@@ -58,16 +59,23 @@ accents. Dark mode ships with it — toggle it in the header or in Settings → 
 
 ## Install
 
-Requires **macOS 14 or later**.
-
 ### Download
 
-Grab **[Safespace.dmg](https://github.com/999david7/Safespace/releases/latest/download/Safespace.dmg)** from the latest
-release, open it and drag **Safespace** into **Applications**.
+| Platform | Download | |
+| --- | --- | --- |
+| **macOS 14+** | **[Safespace.dmg](https://github.com/999david7/Safespace/releases/latest/download/Safespace.dmg)** | Open it and drag **Safespace** into **Applications**. |
+| **Windows 10/11** | **[Safespace-Setup.exe](https://github.com/999david7/Safespace/releases/latest/download/Safespace-Setup.exe)** | Run it. Installs for your user, no admin needed. |
+| Windows, portable | [Safespace-Portable.exe](https://github.com/999david7/Safespace/releases/latest/download/Safespace-Portable.exe) | Single file, no install. Needs WebView2 (built into Windows 11). |
+
+Neither build is signed with a paid certificate yet. On Windows, SmartScreen may say *"Windows
+protected your PC"*: click **More info → Run anyway**. For macOS, see below.
+
+Both apps use the same vault format, so a `vault.safespace` copied from a Mac opens on a PC and the
+other way round. On Windows it lives in `%APPDATA%\Safespace\vault.safespace`.
 
 ### Build from source
 
-Needs a Swift toolchain (Xcode or the Command Line Tools).
+**macOS** needs a Swift toolchain (Xcode or the Command Line Tools).
 
 ```bash
 git clone https://github.com/999david7/Safespace.git Safespace-for-Mac
@@ -75,7 +83,17 @@ cd Safespace-for-Mac
 scripts/build-app.sh --install     # builds and copies to /Applications
 ```
 
-Leave off `--install` to get `build/Safespace.app` without touching `/Applications`.
+Leave off `--install` to get `build/Safespace.app` without touching `/Applications`, and run
+`scripts/make-dmg.sh` afterwards to pack it into `build/Safespace.dmg`.
+
+**Windows** needs [Node.js](https://nodejs.org) 20+ and [Rust](https://rustup.rs) (with the MSVC build
+tools it asks for).
+
+```powershell
+cd windows
+npm ci
+npm run build      # installer in src-tauri\target\release\bundle\nsis\
+```
 
 The app is **ad-hoc signed, not notarized**, so Gatekeeper complains on first launch. Right-click the
 app and choose **Open** once. On recent macOS versions you may instead have to allow it under
@@ -106,7 +124,9 @@ stays encrypted wherever you copy it.
 Sources/SafespaceCore/   crypto, storage, generator, strength estimation (UI-free, unit tested)
 Sources/Safespace/       SwiftUI app: vault, detail/editor panels, generator, Touch ID, clipboard
 Tests/                   Swift Testing suite for the core
-scripts/                 app bundling and icon rendering
+Resources/               app icon (rendered by scripts/make-icon.py)
+scripts/                 app bundling, DMG packing and icon rendering
+windows/                 Safespace for Windows (Tauri): src/ is the UI and a JS port of the core
 ```
 
 The vault file lives at `~/Library/Application Support/Safespace/vault.safespace` and holds JSON
@@ -120,6 +140,12 @@ Touch ID adds `touchid.enrollment` next to the vault: a Secure Enclave P-256 key
 refuses to use that key without a fingerprint, the file is useless on any other Mac, and adding or
 removing fingerprints invalidates it (Safespace then turns Touch ID unlock off and asks for your
 password). No Apple developer account or keychain entitlement needed.
+
+**On Windows** the same format is produced with WebCrypto inside the app window (`windows/src/core.js`);
+the derived key is created non-extractable and never leaves it. A test in the Swift suite opens a vault
+written by the Windows app, so the two can't drift apart. The Windows app has no Touch ID equivalent yet
+(Windows Hello unlock is a possible follow-up); it auto-locks after inactivity and when the PC sleeps, and
+copies are excluded from Windows clipboard history and cloud clipboard.
 
 See [SECURITY.md](SECURITY.md) for the threat model, including what this does **not** protect
 against.
