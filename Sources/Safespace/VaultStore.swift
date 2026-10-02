@@ -56,11 +56,28 @@ final class VaultStore {
     func unlock(password: String) async throws {
         isBusy = true
         defer { isBusy = false }
+        if storage.holdsClassicVault {
+            try await upgradeClassicVault(password: password)
+            return
+        }
         let file = try storage.read()
         let (vault, contents) = try await Task.detached(priority: .userInitiated) {
             try Vault.decryptContents(file, password: password)
         }.value
         open(vault, contents: contents)
+    }
+
+    /// Converts a vault from the original SafeSpace to this format, keeping its master password.
+    /// The original file stays next to the vault as `vault.dat.classic`.
+    private func upgradeClassicVault(password: String) async throws {
+        let data = try Data(contentsOf: storage.url)
+        let (vault, contents) = try await Task.detached(priority: .userInitiated) {
+            let contents = try ClassicVault.contents(of: data, password: password)
+            return (try Vault.create(password: password), contents)
+        }.value
+        try storage.upgradeClassic(to: Vault.encrypt(contents.entries, groups: contents.groups, with: vault))
+        open(vault, contents: contents)
+        showToast("Converted your SafeSpace vault · \(contents.entries.count) logins")
     }
 
     /// First run on this Mac: use an existing vault file (a backup, or one from another computer).
@@ -76,10 +93,18 @@ final class VaultStore {
         guard state == .unlocked else { return ImportSummary() }
         isBusy = true
         defer { isBusy = false }
-        let file = try VaultStorage(url: url).read()
-        let (_, imported) = try await Task.detached(priority: .userInitiated) {
-            try Vault.decryptContents(file, password: password)
-        }.value
+        let data = try Data(contentsOf: url)
+        let imported: VaultContents
+        if ClassicVault.isClassic(data) {
+            imported = try await Task.detached(priority: .userInitiated) {
+                try ClassicVault.contents(of: data, password: password)
+            }.value
+        } else {
+            let file = try VaultStorage(url: url).read()
+            imported = try await Task.detached(priority: .userInitiated) {
+                try Vault.decryptContents(file, password: password).1
+            }.value
+        }
         let (merged, summary) = VaultContents(entries: entries, groups: groups).merging(imported)
         try persist(merged.entries, groups: merged.groups)
         return summary

@@ -5,16 +5,26 @@ const tauri = globalThis.__TAURI__;
 
 function browserFallback() {
   const KEY = "safespace.dev-vault";
+  // localStorage holds text; a binary vault from the original SafeSpace is kept as base64.
+  const BINARY = "base64:";
+  const toBytes = (stored) =>
+    stored.startsWith(BINARY) ? Uint8Array.from(atob(stored.slice(BINARY.length)), (c) => c.charCodeAt(0)) : new TextEncoder().encode(stored);
+  const toStored = (bytes) => (bytes[0] === 0x7b /* { */ ? new TextDecoder().decode(bytes) : BINARY + btoa(String.fromCharCode(...bytes)));
   let clearTimer;
   return {
     isApp: false,
     vaultLocation: async () => "(browser preview) localStorage",
     vaultExists: async () => localStorage.getItem(KEY) !== null,
     readVault: async () => localStorage.getItem(KEY),
+    readVaultBytes: async () => toBytes(localStorage.getItem(KEY) ?? ""),
     writeVault: async (contents) => localStorage.setItem(KEY, contents),
-    adoptVault: async (contents) => {
-      if (localStorage.getItem(KEY) !== null) throw new Error("A vault already exists on this PC.");
+    upgradeClassicVault: async (contents) => {
+      if (localStorage.getItem(KEY + ".classic") === null) localStorage.setItem(KEY + ".classic", localStorage.getItem(KEY) ?? "");
       localStorage.setItem(KEY, contents);
+    },
+    adoptVault: async (bytes) => {
+      if (localStorage.getItem(KEY) !== null) throw new Error("A vault already exists on this PC.");
+      localStorage.setItem(KEY, toStored(bytes));
     },
     readVaultFallbacks: async () => {
       const backup = localStorage.getItem(KEY + ".bak");
@@ -47,8 +57,10 @@ function appBridge() {
     vaultLocation: () => invoke("vault_location"),
     vaultExists: () => invoke("vault_exists"),
     readVault: () => invoke("read_vault"),
+    readVaultBytes: async () => new Uint8Array(await invoke("read_vault_bytes")),
     writeVault: (contents) => invoke("write_vault", { contents }),
-    adoptVault: (contents) => invoke("adopt_vault", { contents }),
+    upgradeClassicVault: (contents) => invoke("upgrade_classic_vault", { contents }),
+    adoptVault: (bytes) => invoke("adopt_vault", { contents: Array.from(bytes) }),
     readVaultFallbacks: () => invoke("read_vault_fallbacks"),
     restoreVault: (contents) => invoke("restore_vault", { contents }),
     revealVault: () => invoke("reveal_vault"),
@@ -63,7 +75,10 @@ function appBridge() {
 
 export const platform = tauri ? appBridge() : browserFallback();
 
-/** Lets the user pick a vault file (vault.dat, or vault.safespace from older versions) and reads it. */
+/**
+ * Lets the user pick a vault file (vault.dat, including one from the original SafeSpace, or
+ * vault.safespace from older versions) and reads it as both bytes and text.
+ */
 export function pickVaultFile() {
   return new Promise((resolve) => {
     const input = document.createElement("input");
@@ -71,7 +86,9 @@ export function pickVaultFile() {
     input.accept = ".dat,.safespace,.bak,application/json";
     input.addEventListener("change", async () => {
       const file = input.files?.[0];
-      resolve(file ? { name: file.name, text: await file.text() } : null);
+      if (!file) return resolve(null);
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      resolve({ name: file.name, bytes, text: new TextDecoder().decode(bytes) });
     });
     input.addEventListener("cancel", () => resolve(null));
     input.click();

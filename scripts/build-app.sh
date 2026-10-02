@@ -5,7 +5,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT="$(pwd)"
 APP="$ROOT/build/Safespace.app"
-VERSION="${SAFESPACE_VERSION:-1.2.1}"
+VERSION="${SAFESPACE_VERSION:-1.3.0}"
 
 # With only the Command Line Tools installed, the newest SDKs declare SwiftUI's @State as a
 # macro whose plugin ships only with Xcode. If the default build fails, try older SDKs.

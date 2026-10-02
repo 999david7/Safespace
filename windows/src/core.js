@@ -178,6 +178,126 @@ async function decryptWithKey(file, key) {
   return { vault: { key, salt: file.salt, iterations: file.iterations }, entries, groups };
 }
 
+// MARK: - Original SafeSpace (vault.dat from the C++ app)
+
+// The original app kept a binary vault at %APPDATA%\SafeSpace\vault.dat, the same path as ours.
+// Little-endian: "SAFESPC\0", version u32, iterations u32, salt 16, nonce 12, tag 16,
+// length u32, then AES-256-GCM ciphertext (no associated data). Port of ClassicVault.swift.
+const CLASSIC_MAGIC = encoder.encode("SAFESPC\0");
+const CLASSIC_HEADER_LENGTH = 8 + 4 + 4 + 16 + 12 + 16 + 4;
+
+/** Whether `bytes` (a Uint8Array) is a vault from the original SafeSpace. */
+export function isClassicVault(bytes) {
+  return bytes instanceof Uint8Array && bytes.length >= CLASSIC_MAGIC.length && CLASSIC_MAGIC.every((b, i) => bytes[i] === b);
+}
+
+function parseClassicFile(bytes) {
+  if (!isClassicVault(bytes) || bytes.length < CLASSIC_HEADER_LENGTH) throw corruptFile();
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const version = view.getUint32(8, true);
+  if (version > 1) throw new VaultError("unsupportedVersion", `This vault was created by a newer version of SafeSpace (format ${version}).`);
+  const iterations = view.getUint32(12, true);
+  if (iterations === 0 || iterations > 50_000_000) throw corruptFile();
+  const length = view.getUint32(60, true);
+  if (CLASSIC_HEADER_LENGTH + length !== bytes.length) throw corruptFile();
+  return {
+    iterations,
+    salt: bytes.slice(16, 32),
+    nonce: bytes.slice(32, 44),
+    // WebCrypto wants the tag appended to the ciphertext.
+    sealed: new Uint8Array([...bytes.subarray(CLASSIC_HEADER_LENGTH), ...bytes.subarray(44, 60)]),
+  };
+}
+
+/** Checks the header without decrypting, so a bad file is refused before asking for a password. */
+export function readClassicHeader(bytes) {
+  const { salt, iterations } = parseClassicFile(bytes);
+  return { salt, iterations };
+}
+
+/** Decrypts an original SafeSpace vault into `{ entries, groups }`; categories become groups. */
+export async function decryptClassicVault(bytes, password) {
+  const file = parseClassicFile(bytes);
+  const key = await deriveKey(password, file.salt, file.iterations);
+  let plaintext;
+  try {
+    plaintext = new Uint8Array(await subtle.decrypt({ name: "AES-GCM", iv: file.nonce }, key, file.sealed));
+  } catch {
+    throw wrongPassword();
+  }
+  return convertClassicRecords(parseClassicRecords(plaintext));
+}
+
+/** Like `unlockVault`, for an original SafeSpace file. Also returns the password form that worked. */
+export async function unlockClassicVault(bytes, password) {
+  let lastError;
+  for (const candidate of passwordVariants(password)) {
+    try {
+      return { ...(await decryptClassicVault(bytes, candidate)), password: candidate };
+    } catch (error) {
+      if (error.code !== "wrongPassword") throw error;
+      lastError = error;
+    }
+  }
+  throw lastError;
+}
+
+function parseClassicRecords(plaintext) {
+  const view = new DataView(plaintext.buffer, plaintext.byteOffset, plaintext.byteLength);
+  const strict = new TextDecoder("utf-8", { fatal: true });
+  let position = 0;
+  const need = (n) => {
+    if (n < 0 || position + n > plaintext.length) throw corruptFile();
+  };
+  const u32 = () => (need(4), (position += 4), view.getUint32(position - 4, true));
+  const i64 = () => (need(8), (position += 8), Number(view.getBigInt64(position - 8, true)));
+  const string = () => {
+    const length = u32();
+    need(length);
+    position += length;
+    try {
+      return strict.decode(plaintext.subarray(position - length, position));
+    } catch {
+      throw corruptFile();
+    }
+  };
+
+  const count = u32();
+  u32(); // next id; ours are UUIDs
+  const records = [];
+  for (let i = 0; i < count; i++) {
+    u32(); // id
+    const [service, username, password, category, notes] = [string(), string(), string(), string(), string()];
+    records.push({ service, username, password, category, notes, created: i64(), updated: i64() });
+  }
+  return records;
+}
+
+function convertClassicRecords(records) {
+  const groups = [];
+  const entries = records.map((record) => {
+    const category = record.category.trim();
+    let group = null;
+    if (category) {
+      group = groups.find((g) => g.name.toLowerCase() === category.toLowerCase());
+      if (!group) {
+        group = { id: newID(), name: category, color: suggestedGroupColor(groups) };
+        groups.push(group);
+      }
+    }
+    return makeEntry({
+      title: record.service,
+      username: record.username,
+      password: record.password,
+      notes: record.notes,
+      groupID: group?.id ?? null,
+      createdAt: record.created - REFERENCE_EPOCH,
+      updatedAt: record.updated - REFERENCE_EPOCH,
+    });
+  });
+  return { entries, groups };
+}
+
 // MARK: - Entries & groups
 
 export const newID = () => crypto.randomUUID().toUpperCase();

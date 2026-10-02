@@ -328,7 +328,7 @@ function setupHTML() {
         <input class="input" type="password" id="setup-confirm" placeholder="Repeat password"></div>
       <div id="setup-meter" style="margin-top:18px">${strengthMeter(0, { showBits: false, dim: true })}</div>
       <div class="message" id="setup-message">There is no password recovery. Keep it somewhere safe.</div>
-      <button class="link-button" style="margin-top:16px" data-action="open-existing" title="Use a vault.dat or vault.safespace from a backup or another computer">Open an existing vault file…</button>`,
+      <button class="link-button" style="margin-top:16px" data-action="open-existing" title="Use a vault.dat (also from the original SafeSpace) or vault.safespace from a backup or another computer">Open an existing vault file…</button>`,
     footer: `<div class="cells top"><button class="cell prominent h44" data-action="create-vault" id="setup-create" disabled>Create vault</button></div>`,
   });
 }
@@ -377,8 +377,10 @@ async function openExistingVault() {
   const file = await pickVaultFile();
   if (!file) return;
   try {
-    core.readHeader(file.text); // refuses anything that isn't a Safespace vault
-    await platform.adoptVault(file.text);
+    // Refuses anything that isn't a Safespace vault, current or from the original SafeSpace.
+    if (core.isClassicVault(file.bytes)) core.readClassicHeader(file.bytes);
+    else core.readHeader(file.text);
+    await platform.adoptVault(file.bytes);
     state.screen = "locked";
     render();
     $("#unlock-message").textContent = `Opened ${file.name}. Enter its master password.`;
@@ -413,12 +415,19 @@ async function unlock() {
   $("#unlock-button").disabled = true;
   $("#unlock-button").textContent = "Unlocking";
   try {
-    const text = await platform.readVault();
+    const bytes = await platform.readVaultBytes();
     let opened;
     let restoredFrom = null;
+    let convertedClassic = false;
     try {
-      opened = await core.unlockVault(text, password);
+      if (core.isClassicVault(bytes)) {
+        opened = await upgradeClassicVault(bytes, password);
+        convertedClassic = true;
+      } else {
+        opened = await core.unlockVault(new TextDecoder().decode(bytes), password);
+      }
     } catch (error) {
+      if (core.isClassicVault(bytes)) throw error;
       if (error.code !== "wrongPassword") throw error;
       // The password may belong to an older copy (the backup, or a file left by 1.1).
       const fallback = await openFallback(password);
@@ -428,7 +437,9 @@ async function unlock() {
     }
     state.busy = false;
     openVault(opened);
-    if (restoredFrom) {
+    if (convertedClassic) {
+      showToast(`Converted your SafeSpace vault · ${opened.entries.length} logins`);
+    } else if (restoredFrom) {
       showToast(`Opened your backup (${restoredFrom})`);
       setTimeout(
         () => alertDialog("Restored from a backup", `Your password didn't open vault.dat, but it opened ${restoredFrom}, so that copy is now your vault. Changes made after that backup may be missing. The file that didn't open was kept next to it as vault.dat.unreadable-…, not deleted.`),
@@ -451,6 +462,17 @@ async function unlock() {
         ? "Incorrect master password. Check Caps Lock and that the keyboard layout (e.g. English or German) is the one you used when you set it."
         : error.message || "Couldn't open the vault.";
   }
+}
+
+/**
+ * A vault from the original SafeSpace (same path, binary format): converts it to the current format
+ * with the same master password. The original stays next to it as vault.dat.classic.
+ */
+async function upgradeClassicVault(bytes, password) {
+  const classic = await core.unlockClassicVault(bytes, password);
+  const vault = await core.createVault(classic.password);
+  await platform.upgradeClassicVault(await core.encryptVault(classic.entries, classic.groups, vault));
+  return { vault, entries: classic.entries, groups: classic.groups };
 }
 
 async function openFallback(password) {
@@ -1086,7 +1108,7 @@ function openSettings(tab = "general") {
             <div class="setting">${toggleHTML("lockOnSleep", prefs.get("lockOnSleep"), "Lock when this PC sleeps")}</div>
             <div class="setting"><div class="name">Clear copied passwords after</div>${select("clipboardClearSeconds", CLEAR_OPTIONS)}</div>
             <div class="setting"><div><div class="name">Import logins</div>
-                <div class="hint">From another Safespace vault: vault.dat, or vault.safespace from an older version. Logins you already have are kept.</div></div>
+                <div class="hint">From another Safespace vault: vault.dat (also from the original SafeSpace, whose categories become groups), or vault.safespace from an older version. Logins you already have are kept.</div></div>
               <button class="cell h32" style="flex:0 0 140px;border:1px solid var(--line-strong);border-radius:2px" id="import-choose"
                 ${state.screen === "unlocked" ? "" : 'disabled title="Unlock your vault first"'}>Choose file…</button></div>
             <div id="import-area"></div>
@@ -1145,7 +1167,8 @@ function openSettings(tab = "general") {
     const file = await pickVaultFile();
     if (!file) return;
     try {
-      core.readHeader(file.text);
+      if (core.isClassicVault(file.bytes)) core.readClassicHeader(file.bytes);
+      else core.readHeader(file.text);
       importFile = file;
       drawImport();
     } catch (error) {
@@ -1161,7 +1184,9 @@ function openSettings(tab = "general") {
     $("#imp-submit", sheet).disabled = true;
     $("#imp-submit", sheet).textContent = "Importing";
     try {
-      const opened = await core.decryptVault(importFile.text, input.value);
+      const opened = core.isClassicVault(importFile.bytes)
+        ? await core.unlockClassicVault(importFile.bytes, input.value)
+        : await core.decryptVault(importFile.text, input.value);
       const merged = core.mergeVaults({ entries: state.entries, groups: state.groups }, opened);
       await persist(merged.entries, merged.groups);
       importFile = null;

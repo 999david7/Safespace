@@ -271,3 +271,89 @@ private let windowsVaultFixture = #"""
     #expect(again == merged)
     #expect(second.added == 0 && second.updated == 0)
 }
+
+// MARK: - Original SafeSpace (C++ vault.dat)
+
+/// Writes a vault the way the original app's `Vault::save` does.
+private func classicVaultData(_ records: [ClassicVault.Record], password: String, iterations: UInt32 = 1_000) throws -> Data {
+    func u32(_ v: UInt32) -> Data { withUnsafeBytes(of: v.littleEndian) { Data($0) } }
+    func i64(_ v: Int64) -> Data { withUnsafeBytes(of: v.littleEndian) { Data($0) } }
+    func str(_ s: String) -> Data { u32(UInt32(s.utf8.count)) + Data(s.utf8) }
+
+    var plain = u32(UInt32(records.count)) + u32(UInt32(records.count + 1))
+    for (index, r) in records.enumerated() {
+        plain += u32(UInt32(index + 1))
+        plain += str(r.service) + str(r.username) + str(r.password) + str(r.category) + str(r.notes)
+        plain += i64(Int64(r.created.timeIntervalSince1970)) + i64(Int64(r.updated.timeIntervalSince1970))
+    }
+    let salt = Vault.randomData(count: 16)
+    let key = try Vault.deriveKey(password: password, salt: salt, iterations: iterations)
+    let box = try AES.GCM.seal(plain, using: key)
+    return Data("SAFESPC\0".utf8) + u32(1) + u32(iterations) + salt + Data(box.nonce) + box.tag
+        + u32(UInt32(box.ciphertext.count)) + box.ciphertext
+}
+
+@Test func classicVaultDecrypts() throws {
+    let records = [
+        ClassicVault.Record(service: "GitHub", username: "me", password: "s3cr3t!", category: "Work", notes: "2FA on",
+                            created: Date(timeIntervalSince1970: 1_700_000_000), updated: Date(timeIntervalSince1970: 1_700_000_500)),
+        ClassicVault.Record(service: "Bänk", username: "ü", password: "pässwörd", category: "",
+                            created: Date(timeIntervalSince1970: 1_600_000_000), updated: Date(timeIntervalSince1970: 1_600_000_000)),
+    ]
+    let data = try classicVaultData(records, password: "hunter2 ✓")
+    #expect(ClassicVault.isClassic(data))
+    #expect(try ClassicVault.decrypt(data, password: "hunter2 ✓") == records)
+}
+
+@Test func classicVaultWrongPasswordIsRejected() throws {
+    let data = try classicVaultData([ClassicVault.Record(service: "a")], password: "right")
+    #expect(throws: VaultError.wrongPassword) {
+        try ClassicVault.decrypt(data, password: "wrong")
+    }
+}
+
+@Test func classicVaultTruncatedIsCorrupt() throws {
+    let data = try classicVaultData([ClassicVault.Record(service: "a")], password: "pw")
+    #expect(throws: VaultError.corruptFile) {
+        try ClassicVault.decrypt(data.dropLast(3), password: "pw")
+    }
+    #expect(throws: VaultError.corruptFile) {
+        try ClassicVault.validate(Data("not a vault".utf8))
+    }
+}
+
+@Test func classicCategoriesBecomeGroups() throws {
+    let records = [
+        ClassicVault.Record(service: "GitHub", category: "Work"),
+        ClassicVault.Record(service: "Chase", category: "Finance"),
+        ClassicVault.Record(service: "Amex", category: " finance "),
+        ClassicVault.Record(service: "Misc"),
+    ]
+    let contents = ClassicVault.convert(records)
+    #expect(contents.groups.map(\.name) == ["Work", "Finance"])
+    #expect(contents.groups[0].color != contents.groups[1].color)
+    #expect(contents.entries.map(\.groupID) == [contents.groups[0].id, contents.groups[1].id, contents.groups[1].id, nil])
+}
+
+@Test func classicVaultIsAdoptedAndUpgradedKeepingTheOriginal() throws {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    let source = dir.appendingPathComponent("vault-from-pc.dat")
+    let original = try classicVaultData([ClassicVault.Record(service: "GitHub", category: "Work")], password: "pw")
+    try original.write(to: source)
+
+    let storage = VaultStorage(url: dir.appendingPathComponent("Safespace/vault.dat"))
+    try storage.adopt(source)
+    #expect(storage.holdsClassicVault)
+
+    let contents = try ClassicVault.contents(of: Data(contentsOf: storage.url), password: "pw")
+    let vault = try Vault.create(password: "pw", iterations: 1_000)
+    try storage.upgradeClassic(to: Vault.encrypt(contents.entries, groups: contents.groups, with: vault))
+
+    #expect(!storage.holdsClassicVault)
+    #expect(try Data(contentsOf: storage.classicURL) == original)
+    let (_, reopened) = try Vault.decryptContents(storage.read(), password: "pw")
+    #expect(reopened.entries.map(\.title) == ["GitHub"])
+    #expect(reopened.groups.map(\.name) == ["Work"])
+}

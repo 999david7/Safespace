@@ -108,7 +108,7 @@ private struct ImportSection: View {
                     .foregroundStyle(.secondary)
             }
         } footer: {
-            Text("Adds the logins and groups from another Safespace vault (vault.dat, or vault.safespace from an older version). Logins you already have are kept.")
+            Text("Adds the logins and groups from another Safespace vault: vault.dat (also from the original SafeSpace for Windows, whose categories become groups), or vault.safespace from an older version. Logins you already have are kept.")
                 .foregroundStyle(.secondary)
         }
     }

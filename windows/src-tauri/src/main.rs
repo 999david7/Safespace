@@ -56,6 +56,24 @@ fn read_vault(app: tauri::AppHandle) -> Result<String, String> {
     fs::read_to_string(vault_path(&app)?).map_err(|e| format!("Couldn't read the vault: {e}"))
 }
 
+/// The vault as raw bytes, for a binary vault left by the original SafeSpace at the same path.
+#[tauri::command]
+fn read_vault_bytes(app: tauri::AppHandle) -> Result<Vec<u8>, String> {
+    fs::read(vault_path(&app)?).map_err(|e| format!("Couldn't read the vault: {e}"))
+}
+
+/// Replaces an original SafeSpace vault with its converted `contents`. The original file is kept
+/// as `vault.dat.classic` (never deleted) unless a copy is already there.
+#[tauri::command]
+fn upgrade_classic_vault(app: tauri::AppHandle, contents: String) -> Result<(), String> {
+    let path = vault_path(&app)?;
+    let classic = path.with_file_name("vault.dat.classic");
+    if path.is_file() && !classic.exists() {
+        fs::copy(&path, &classic).map_err(|e| format!("Couldn't keep a copy of the original vault: {e}"))?;
+    }
+    write_vault(app, contents)
+}
+
 /// Older copies that may open when `vault.dat` doesn't: its backup and anything left by 1.1.
 /// Returns `[file name, contents]` pairs, newest first.
 #[tauri::command]
@@ -98,7 +116,11 @@ fn restore_vault(app: tauri::AppHandle, contents: String) -> Result<(), String> 
 /// Keeps the previous version as `.bak`, then writes atomically (temp file + rename).
 #[tauri::command]
 fn write_vault(app: tauri::AppHandle, contents: String) -> Result<(), String> {
-    let path = vault_path(&app)?;
+    write_vault_bytes(&app, contents.as_bytes())
+}
+
+fn write_vault_bytes(app: &tauri::AppHandle, contents: &[u8]) -> Result<(), String> {
+    let path = vault_path(app)?;
     let fail = |e: std::io::Error| format!("Couldn't save the vault: {e}");
     fs::create_dir_all(path.parent().expect("vault path has a parent")).map_err(fail)?;
     if path.is_file() {
@@ -109,20 +131,20 @@ fn write_vault(app: tauri::AppHandle, contents: String) -> Result<(), String> {
     let temp = PathBuf::from(temp);
     {
         let mut file = fs::File::create(&temp).map_err(fail)?;
-        file.write_all(contents.as_bytes()).map_err(fail)?;
+        file.write_all(contents).map_err(fail)?;
         file.sync_all().map_err(fail)?;
     }
     fs::rename(&temp, &path).map_err(fail)
 }
 
-/// First run: makes an existing vault file (already checked by the UI) the vault here.
-/// Never replaces a vault that exists.
+/// First run: makes an existing vault file (already checked by the UI) the vault here. Takes raw
+/// bytes, since a file from the original SafeSpace is binary. Never replaces a vault that exists.
 #[tauri::command]
-fn adopt_vault(app: tauri::AppHandle, contents: String) -> Result<(), String> {
+fn adopt_vault(app: tauri::AppHandle, contents: Vec<u8>) -> Result<(), String> {
     if vault_path(&app)?.exists() {
         return Err("A vault already exists on this PC.".into());
     }
-    write_vault(app, contents)
+    write_vault_bytes(&app, &contents)
 }
 
 #[tauri::command]
@@ -217,7 +239,9 @@ fn main() {
             vault_location,
             vault_exists,
             read_vault,
+            read_vault_bytes,
             write_vault,
+            upgrade_classic_vault,
             adopt_vault,
             read_vault_fallbacks,
             restore_vault,

@@ -5,6 +5,7 @@ import { test } from "node:test";
 import {
   characterSets,
   createVault,
+  decryptClassicVault,
   decryptVault,
   defaultPassphraseOptions,
   defaultPasswordOptions,
@@ -14,11 +15,14 @@ import {
   generatePassword,
   hostOf,
   importMessage,
+  isClassicVault,
   mergeVaults,
   passwordVariants,
+  unlockClassicVault,
   unlockVault,
   makeEntry,
   passwordEntropy,
+  readClassicHeader,
   readHeader,
   strengthLevel,
   vaultHealth,
@@ -154,4 +158,76 @@ test("unlock accepts the other Unicode form of the same password", async () => {
   assert.equal((await unlockVault(text, typed)).entries[0].title, "a");
   await assert.rejects(unlockVault(text, "Gruse-Ol"), { code: "wrongPassword" });
   assert.deepEqual(passwordVariants("plain"), ["plain"]);
+});
+
+// MARK: - Original SafeSpace (C++ vault.dat)
+
+/** Writes a vault the way the original app's `Vault::save` does. */
+async function classicVault(records, password, iterations = 1_000) {
+  const enc = new TextEncoder();
+  const parts = [];
+  const u32 = (v) => { const b = new Uint8Array(4); new DataView(b.buffer).setUint32(0, v, true); parts.push(b); };
+  const i64 = (v) => { const b = new Uint8Array(8); new DataView(b.buffer).setBigInt64(0, BigInt(v), true); parts.push(b); };
+  const str = (s) => { const b = enc.encode(s); u32(b.length); parts.push(b); };
+  u32(records.length);
+  u32(records.length + 1);
+  records.forEach((r, i) => {
+    u32(i + 1);
+    [r.service, r.username ?? "", r.password ?? "", r.category ?? "", r.notes ?? ""].forEach(str);
+    i64(r.created ?? 1_700_000_000);
+    i64(r.updated ?? 1_700_000_000);
+  });
+  const plain = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
+  parts.reduce((offset, p) => (plain.set(p, offset), offset + p.length), 0);
+
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const nonce = crypto.getRandomValues(new Uint8Array(12));
+  const material = await crypto.subtle.importKey("raw", enc.encode(password), "PBKDF2", false, ["deriveKey"]);
+  const key = await crypto.subtle.deriveKey({ name: "PBKDF2", hash: "SHA-256", salt, iterations }, material, { name: "AES-GCM", length: 256 }, false, ["encrypt"]);
+  const sealed = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv: nonce }, key, plain));
+  const cipher = sealed.subarray(0, sealed.length - 16);
+  const tag = sealed.subarray(sealed.length - 16);
+
+  const header = new Uint8Array(64);
+  header.set(enc.encode("SAFESPC\0"));
+  const view = new DataView(header.buffer);
+  view.setUint32(8, 1, true);
+  view.setUint32(12, iterations, true);
+  header.set(salt, 16);
+  header.set(nonce, 32);
+  header.set(tag, 44);
+  view.setUint32(60, cipher.length, true);
+  return new Uint8Array([...header, ...cipher]);
+}
+
+test("original SafeSpace vault decrypts, categories become groups", async () => {
+  const bytes = await classicVault(
+    [
+      { service: "GitHub", username: "me", password: "s3cr3t!", category: "Work", notes: "2FA on", created: 1_700_000_000, updated: 1_700_000_500 },
+      { service: "Bänk", username: "ü", password: "pässwörd", category: " work " },
+      { service: "Misc" },
+    ],
+    "hunter2 ✓",
+  );
+  assert.ok(isClassicVault(bytes));
+  assert.equal(readClassicHeader(bytes).iterations, 1_000);
+  const { entries, groups } = await decryptClassicVault(bytes, "hunter2 ✓");
+  assert.deepEqual(entries.map((e) => [e.title, e.username, e.password, e.notes]), [
+    ["GitHub", "me", "s3cr3t!", "2FA on"],
+    ["Bänk", "ü", "pässwörd", ""],
+    ["Misc", "", "", ""],
+  ]);
+  assert.deepEqual(groups.map((g) => g.name), ["Work"]);
+  assert.deepEqual(entries.map((e) => e.groupID), [groups[0].id, groups[0].id, null]);
+  // Unix seconds become Swift reference-date stamps.
+  assert.equal(entries[0].updatedAt, 1_700_000_500 - 978_307_200);
+});
+
+test("original SafeSpace vault: wrong password, NFD password, damaged file", async () => {
+  const bytes = await classicVault([{ service: "a" }], "Grüße");
+  await assert.rejects(decryptClassicVault(bytes, "wrong"), { code: "wrongPassword" });
+  const opened = await unlockClassicVault(bytes, "Grüße".normalize("NFD"));
+  assert.equal(opened.password, "Grüße".normalize("NFC"));
+  assert.throws(() => readClassicHeader(bytes.subarray(0, bytes.length - 3)), { code: "corruptFile" });
+  assert.ok(!isClassicVault(new TextEncoder().encode('{"version":1}')));
 });

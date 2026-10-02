@@ -128,7 +128,19 @@ jobs:
             **Open** the first time. On Windows, SmartScreen may say "Windows protected your PC": click
             **More info → Run anyway**.
 
-            ## What's new in 1.2.1
+            ## What's new in 1.3
+
+            Opens vaults from the **original SafeSpace** (the earlier C++ app for Windows), on both
+            Windows and macOS:
+
+            - On a PC where the original app was used, its `vault.dat` sits where Safespace looks for
+              it. Unlock with your old master password: the vault is converted to the current format
+              with the same password, and the original file is kept as `vault.dat.classic`.
+            - On a Mac or a new PC, choose **Open an existing vault file…** on the first-run screen, or
+              **Settings → General → Import logins** to merge it into an existing vault.
+            - Categories become groups. Titles, usernames, passwords, notes and dates carry over.
+
+            ## 1.2.1
 
             Fixes for "my password isn't accepted" on Windows:
 

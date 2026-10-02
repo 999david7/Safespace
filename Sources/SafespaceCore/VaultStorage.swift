@@ -39,10 +39,46 @@ public struct VaultStorage: Sendable {
         }
     }
 
+    /// Where the original SafeSpace file is kept after `upgradeClassic(to:)` converts it.
+    public var classicURL: URL {
+        url.appendingPathExtension("classic")
+    }
+
+    /// Whether the vault here is still in the original SafeSpace format (see `ClassicVault`).
+    public var holdsClassicVault: Bool {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return false }
+        defer { try? handle.close() }
+        return ClassicVault.isClassic((try? handle.read(upToCount: 8)) ?? Data())
+    }
+
+    /// Replaces an original SafeSpace vault with its converted contents. The original file is kept
+    /// as `classicURL` (never deleted) unless a copy is already there.
+    public func upgradeClassic(to file: VaultFile) throws {
+        let fm = FileManager.default
+        if !fm.fileExists(atPath: classicURL.path) {
+            try fm.copyItem(at: url, to: classicURL)
+            try? fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: classicURL.path)
+        }
+        try write(file)
+    }
+
     /// Makes `source` (a vault file from another Mac, a backup, an older version…) the vault here.
     /// Refuses files that aren't a Safespace vault, and never replaces an existing vault.
+    /// An original SafeSpace file is copied as is and converted on first unlock.
     public func adopt(_ source: URL) throws {
         guard !exists else { throw VaultError.vaultExists }
+        let data = try Data(contentsOf: source)
+        if ClassicVault.isClassic(data) {
+            try ClassicVault.validate(data)
+            try FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(),
+                withIntermediateDirectories: true,
+                attributes: [.posixPermissions: 0o700]
+            )
+            try data.write(to: url, options: [.atomic])
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+            return
+        }
         let file = try VaultStorage(url: source).read()
         guard file.version <= VaultFile.currentVersion else { throw VaultError.unsupportedVersion(file.version) }
         guard file.kdf == VaultFile.kdfName, file.salt.count >= 16, file.iterations > 0 else {

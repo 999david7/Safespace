@@ -84,6 +84,12 @@ way round. On Windows it lives in `%APPDATA%\Safespace\vault.dat`.
 
 Updating from 1.0/1.1 needs nothing: the old `vault.safespace` is renamed to `vault.dat` on first launch.
 
+**From the original SafeSpace** (the earlier C++ Windows app, whose binary `vault.dat` starts with
+`SAFESPC`): both apps open it too, in either of the ways above. On a PC that still has it in
+`%APPDATA%\SafeSpace\vault.dat`, just start Safespace and unlock with your old master password. The
+first unlock converts it to the current format with the same password, keeps the original next to it
+as `vault.dat.classic`, and turns its categories into groups.
+
 ### Build from source
 
 **macOS** needs a Swift toolchain (Xcode or the Command Line Tools).
