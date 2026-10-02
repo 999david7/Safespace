@@ -126,6 +126,28 @@ export async function decryptVault(text, password) {
   return decryptWithKey(file, key);
 }
 
+/**
+ * The password as typed plus its other Unicode forms. "ü" can be one character (NFC) or "u" plus a
+ * combining mark (NFD); which one a keyboard produces can differ between machines and apps.
+ */
+export function passwordVariants(password) {
+  return [...new Set([password, password.normalize("NFC"), password.normalize("NFD")])];
+}
+
+/** Opens a vault with the password as typed, falling back to its other Unicode forms. */
+export async function unlockVault(text, password) {
+  let lastError;
+  for (const candidate of passwordVariants(password)) {
+    try {
+      return await decryptVault(text, candidate);
+    } catch (error) {
+      if (error.code !== "wrongPassword") throw error;
+      lastError = error;
+    }
+  }
+  throw lastError;
+}
+
 async function decryptWithKey(file, key) {
   let plaintext;
   try {

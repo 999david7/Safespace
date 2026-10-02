@@ -56,6 +56,45 @@ fn read_vault(app: tauri::AppHandle) -> Result<String, String> {
     fs::read_to_string(vault_path(&app)?).map_err(|e| format!("Couldn't read the vault: {e}"))
 }
 
+/// Older copies that may open when `vault.dat` doesn't: its backup and anything left by 1.1.
+/// Returns `[file name, contents]` pairs, newest first.
+#[tauri::command]
+fn read_vault_fallbacks(app: tauri::AppHandle) -> Result<Vec<(String, String)>, String> {
+    let path = vault_path(&app)?;
+    let legacy = path.with_file_name("vault.safespace");
+    let mut candidates: Vec<(PathBuf, std::time::SystemTime)> = [backup_path(&path), legacy.clone(), backup_path(&legacy)]
+        .into_iter()
+        .filter_map(|p| {
+            let modified = fs::metadata(&p).ok()?.modified().ok()?;
+            Some((p, modified))
+        })
+        .collect();
+    candidates.sort_by(|a, b| b.1.cmp(&a.1));
+    Ok(candidates
+        .into_iter()
+        .filter_map(|(p, _)| {
+            let name = p.file_name()?.to_string_lossy().into_owned();
+            Some((name, fs::read_to_string(&p).ok()?))
+        })
+        .collect())
+}
+
+/// Moves `vault.dat` aside as `vault.dat.unreadable-<seconds>` (never deleted) and makes
+/// `contents` the vault. Used when an older copy opened but the current file didn't.
+#[tauri::command]
+fn restore_vault(app: tauri::AppHandle, contents: String) -> Result<(), String> {
+    let path = vault_path(&app)?;
+    if path.exists() {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let aside = path.with_file_name(format!("vault.dat.unreadable-{stamp}"));
+        fs::rename(&path, aside).map_err(|e| format!("Couldn't restore the vault: {e}"))?;
+    }
+    write_vault(app, contents)
+}
+
 /// Keeps the previous version as `.bak`, then writes atomically (temp file + rename).
 #[tauri::command]
 fn write_vault(app: tauri::AppHandle, contents: String) -> Result<(), String> {
@@ -180,6 +219,8 @@ fn main() {
             read_vault,
             write_vault,
             adopt_vault,
+            read_vault_fallbacks,
+            restore_vault,
             reveal_vault,
             copy_text,
             clear_clipboard,

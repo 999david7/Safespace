@@ -15,6 +15,8 @@ import {
   hostOf,
   importMessage,
   mergeVaults,
+  passwordVariants,
+  unlockVault,
   makeEntry,
   passwordEntropy,
   readHeader,
@@ -141,4 +143,15 @@ test("import merges without losing anything", () => {
   const again = mergeVaults(merged, imported);
   assert.deepEqual(again.summary, { added: 0, updated: 0, skipped: 4, groupsAdded: 0 });
   assert.deepEqual(again.entries, merged.entries);
+});
+
+test("unlock accepts the other Unicode form of the same password", async () => {
+  const nfd = "Grüße-Öl".normalize("NFD");
+  const vault = await createVault(nfd, 1_000);
+  const text = await encryptVault([makeEntry({ title: "a" })], [], vault);
+  const typed = "Grüße-Öl".normalize("NFC");
+  assert.notEqual(typed, nfd);
+  assert.equal((await unlockVault(text, typed)).entries[0].title, "a");
+  await assert.rejects(unlockVault(text, "Gruse-Ol"), { code: "wrongPassword" });
+  assert.deepEqual(passwordVariants("plain"), ["plain"]);
 });
