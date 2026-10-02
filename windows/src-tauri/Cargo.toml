@@ -1,6 +1,6 @@
 [package]
 name = "safespace"
-version = "1.2.0"
+version = "1.2.1"
 description = "Safespace: a private, offline password manager"
 authors = ["David Winkler"]
 license = "MIT"

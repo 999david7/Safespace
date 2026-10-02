@@ -16,6 +16,15 @@ function browserFallback() {
       if (localStorage.getItem(KEY) !== null) throw new Error("A vault already exists on this PC.");
       localStorage.setItem(KEY, contents);
     },
+    readVaultFallbacks: async () => {
+      const backup = localStorage.getItem(KEY + ".bak");
+      return backup ? [["vault.dat.bak", backup]] : [];
+    },
+    restoreVault: async (contents) => {
+      const current = localStorage.getItem(KEY);
+      if (current !== null) localStorage.setItem(KEY + ".unreadable", current);
+      localStorage.setItem(KEY, contents);
+    },
     revealVault: async () => {},
     copyText: async (text, clearAfter) => {
       await navigator.clipboard?.writeText(text).catch(() => {});
@@ -40,6 +49,8 @@ function appBridge() {
     readVault: () => invoke("read_vault"),
     writeVault: (contents) => invoke("write_vault", { contents }),
     adoptVault: (contents) => invoke("adopt_vault", { contents }),
+    readVaultFallbacks: () => invoke("read_vault_fallbacks"),
+    restoreVault: (contents) => invoke("restore_vault", { contents }),
     revealVault: () => invoke("reveal_vault"),
     copyText: (text, clearAfter) => invoke("copy_text", { text, clearAfter }),
     clearClipboard: () => invoke("clear_clipboard"),

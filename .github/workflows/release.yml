@@ -128,7 +128,19 @@ jobs:
             **Open** the first time. On Windows, SmartScreen may say "Windows protected your PC": click
             **More info → Run anyway**.
 
-            ## What's new in 1.2
+            ## What's new in 1.2.1
+
+            Fixes for "my password isn't accepted" on Windows:
+
+            - If the password doesn't open `vault.dat` but opens the backup (`vault.dat.bak`, or a
+              `vault.safespace` left by 1.1), Safespace restores that copy and tells you. The file that
+              didn't open is kept as `vault.dat.unreadable-…`, never deleted.
+            - Passwords with accented letters (ü, é, ß…) are accepted however the keyboard encodes them.
+            - The lock screen warns when Caps Lock is on, and a wrong password hints at the keyboard layout.
+            - Fixed a rare case where saving a login while changing the master password could write the
+              vault with the old password.
+
+            ## 1.2
 
             - The vault is now stored as `vault.dat`. Updating from 1.1 needs nothing: the old
               `vault.safespace` is renamed automatically on first launch.

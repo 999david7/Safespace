@@ -128,6 +128,8 @@ const state = {
   entries: [],
   groups: [],
   busy: false,
+  /** Bumped on every unlock and lock, so writes queued for an earlier session are dropped. */
+  session: 0,
   // Desk
   filter: "all",
   search: "",
@@ -141,10 +143,12 @@ let writeQueue = Promise.resolve();
 
 /** Writes to disk first and only then updates memory, so the UI never shows unsaved data. */
 function persist(entries, groups = state.groups) {
-  const vault = state.vault;
+  const session = state.session;
   const job = writeQueue.then(async () => {
-    if (!vault || state.vault !== vault) return false;
-    await platform.writeVault(await core.encryptVault(entries, groups, vault));
+    // Use the key current when the write runs: a master-password change queued earlier may have
+    // replaced it, and writing with the old key would leave a file the new password can't open.
+    if (state.session !== session || !state.vault) return false;
+    await platform.writeVault(await core.encryptVault(entries, groups, state.vault));
     state.entries = entries;
     state.groups = groups;
     return true;
@@ -158,6 +162,7 @@ function persist(entries, groups = state.groups) {
 }
 
 function openVault({ vault, entries, groups }) {
+  state.session++;
   state.vault = vault;
   state.entries = entries;
   state.groups = groups;
@@ -173,6 +178,7 @@ function openVault({ vault, entries, groups }) {
 
 function lock() {
   if (state.screen !== "unlocked") return;
+  state.session++;
   state.vault = null;
   state.entries = [];
   state.groups = [];
@@ -392,7 +398,8 @@ function unlockHTML() {
     body: `
       <div class="field"><span class="eyebrow">Master password</span>
         <input class="input" type="password" id="unlock-password" placeholder="Enter password" data-autofocus></div>
-      <div class="message" id="unlock-message" style="margin-top:10px">Password only.</div>`,
+      <div class="message" id="unlock-message" style="margin-top:10px">Password only.</div>
+      <div class="message error" id="unlock-caps" style="margin-top:4px" hidden>Caps Lock is on.</div>`,
     footer: `<div class="cells top"><button class="cell prominent h44" data-action="unlock" id="unlock-button" disabled>Unlock vault</button></div>`,
   });
 }
@@ -407,9 +414,27 @@ async function unlock() {
   $("#unlock-button").textContent = "Unlocking";
   try {
     const text = await platform.readVault();
-    const opened = await core.decryptVault(text, password);
+    let opened;
+    let restoredFrom = null;
+    try {
+      opened = await core.unlockVault(text, password);
+    } catch (error) {
+      if (error.code !== "wrongPassword") throw error;
+      // The password may belong to an older copy (the backup, or a file left by 1.1).
+      const fallback = await openFallback(password);
+      if (!fallback) throw error;
+      await platform.restoreVault(fallback.contents);
+      ({ opened, name: restoredFrom } = fallback);
+    }
     state.busy = false;
     openVault(opened);
+    if (restoredFrom) {
+      showToast(`Opened your backup (${restoredFrom})`);
+      setTimeout(
+        () => alertDialog("Restored from a backup", `Your password didn't open vault.dat, but it opened ${restoredFrom}, so that copy is now your vault. Changes made after that backup may be missing. The file that didn't open was kept next to it as vault.dat.unreadable-…, not deleted.`),
+        300,
+      );
+    }
   } catch (error) {
     state.busy = false;
     input.disabled = false;
@@ -421,9 +446,36 @@ async function unlock() {
     $("#unlock-button").textContent = "Unlock vault";
     const message = $("#unlock-message");
     message.className = "message error";
-    message.textContent = error.message || "Couldn't open the vault.";
+    message.textContent =
+      error.code === "wrongPassword"
+        ? "Incorrect master password. Check Caps Lock and that the keyboard layout (e.g. English or German) is the one you used when you set it."
+        : error.message || "Couldn't open the vault.";
   }
 }
+
+async function openFallback(password) {
+  const fallbacks = await platform.readVaultFallbacks().catch(() => []);
+  for (const [name, contents] of fallbacks) {
+    try {
+      return { opened: await core.unlockVault(contents, password), name, contents };
+    } catch {}
+  }
+  return null;
+}
+
+function alertDialog(title, text) {
+  const sheet = openSheet("confirm", `
+    <div class="body"><div class="title">${esc(title)}</div><div class="text">${esc(text)}</div></div>
+    <div class="cells top"><button class="cell prominent h42" data-close>OK</button></div>`);
+  $("[data-close]", sheet).focus();
+}
+
+function updateCapsLock(event) {
+  const caps = $("#unlock-caps");
+  if (caps && event.getModifierState) caps.hidden = !event.getModifierState("CapsLock");
+}
+addEventListener("keydown", updateCapsLock, true);
+addEventListener("keyup", updateCapsLock, true);
 
 // MARK: Desk
 
@@ -1147,9 +1199,15 @@ function openSettings(tab = "general") {
       const text = await platform.readVault();
       await core.decryptVault(text, $("#cp-current", sheet).value);
       const vault = await core.createVault($("#cp-new", sheet).value);
-      const entries = state.entries, groups = state.groups;
-      await (writeQueue = writeQueue.then(async () => platform.writeVault(await core.encryptVault(entries, groups, vault))));
-      state.vault = vault;
+      const session = state.session;
+      // Write and switch keys inside the queue, so no other save can slip in between with the old key.
+      const job = writeQueue.then(async () => {
+        if (state.session !== session) throw new Error("The vault was locked. Nothing was changed.");
+        await platform.writeVault(await core.encryptVault(state.entries, state.groups, vault));
+        state.vault = vault;
+      });
+      writeQueue = job.catch(() => {});
+      await job;
       for (const id of ["cp-current", "cp-new", "cp-confirm"]) $("#" + id, sheet).value = "";
       $("#cp-meter", sheet).innerHTML = "";
       message.className = "form-message ok";
