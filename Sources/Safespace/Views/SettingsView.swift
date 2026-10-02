@@ -54,6 +54,8 @@ private struct GeneralSettings: View {
                 }
             }
 
+            ImportSection()
+
             Section {
                 LabeledContent("Vault file") {
                     Button("Show in Finder") {
@@ -68,6 +70,77 @@ private struct GeneralSettings: View {
         }
         .formStyle(.grouped)
         .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+/// Merges another vault file (an older vault.safespace, a backup, another Mac's vault) into this one.
+private struct ImportSection: View {
+    @Environment(VaultStore.self) private var store
+    @State private var file: URL?
+    @State private var password = ""
+    @State private var message: (text: String, isError: Bool)?
+
+    var body: some View {
+        Section {
+            if store.state == .unlocked {
+                LabeledContent("Import logins") {
+                    Button("Choose Vault File…", action: choose)
+                        .disabled(store.isBusy)
+                }
+                if let file {
+                    SecureField("Password for \(file.lastPathComponent)", text: $password)
+                        .onSubmit(run)
+                    HStack {
+                        Spacer()
+                        Button("Cancel") { reset() }
+                        Button("Import", action: run)
+                            .keyboardShortcut(.defaultAction)
+                            .disabled(password.isEmpty || store.isBusy)
+                    }
+                }
+                if let message {
+                    Text(message.text)
+                        .foregroundStyle(message.isError ? .red : .green)
+                        .font(.callout)
+                }
+            } else {
+                Text("Unlock your vault to import logins from another vault file.")
+                    .foregroundStyle(.secondary)
+            }
+        } footer: {
+            Text("Adds the logins and groups from another Safespace vault (vault.dat, or vault.safespace from an older version). Logins you already have are kept.")
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func choose() {
+        guard let url = VaultFilePicker.choose(prompt: "Choose") else { return }
+        file = url
+        password = ""
+        message = nil
+    }
+
+    private func reset() {
+        file = nil
+        password = ""
+    }
+
+    private func run() {
+        guard let file, !password.isEmpty, !store.isBusy else { return }
+        message = nil
+        Task {
+            do {
+                let summary = try await store.importVault(from: file, password: password)
+                reset()
+                message = (summary.message, false)
+                store.showToast(summary.message)
+            } catch VaultError.wrongPassword {
+                password = ""
+                message = ("Wrong password for that vault file.", true)
+            } catch {
+                message = (error.localizedDescription, true)
+            }
+        }
     }
 }
 

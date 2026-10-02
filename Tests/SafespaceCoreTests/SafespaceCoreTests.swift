@@ -69,7 +69,7 @@ import Testing
 @Test func storageWritesPrivateFileAndBackup() throws {
     let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: dir) }
-    let storage = VaultStorage(url: dir.appendingPathComponent("vault.safespace"))
+    let storage = VaultStorage(url: dir.appendingPathComponent("vault.dat"))
     let vault = try Vault.create(password: "pw", iterations: 1_000)
 
     try storage.write(Vault.encrypt([], with: vault))
@@ -193,4 +193,81 @@ private let windowsVaultFixture = #"""
     #expect(github.groupID == contents.groups.first?.id)
     #expect(github.createdAt == Date(timeIntervalSinceReferenceDate: 781_000_000.5))
     #expect(contents.entries[1].groupID == nil)
+}
+
+@Test func defaultVaultIsADatFile() {
+    #expect(VaultStorage.default.url.lastPathComponent == "vault.dat")
+}
+
+@Test func legacyVaultIsRenamedToDat() throws {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let vault = try Vault.create(password: "pw", iterations: 1_000)
+    let legacy = VaultStorage(url: dir.appendingPathComponent(VaultStorage.legacyFileName))
+    try legacy.write(Vault.encrypt([Entry(title: "old")], with: vault))
+    try legacy.write(Vault.encrypt([Entry(title: "old")], with: vault)) // leaves a .bak
+
+    let storage = VaultStorage(url: dir.appendingPathComponent("vault.dat"))
+    try storage.migrateLegacyFile()
+    #expect(storage.exists)
+    #expect(!legacy.exists)
+    #expect(FileManager.default.fileExists(atPath: storage.backupURL.path))
+    #expect(try Vault.decrypt(storage.read(), password: "pw").1.map(\.title) == ["old"])
+
+    // Never overwrites a vault that is already there.
+    try legacy.write(Vault.encrypt([], with: vault))
+    try storage.migrateLegacyFile()
+    #expect(legacy.exists)
+    #expect(try Vault.decrypt(storage.read(), password: "pw").1.count == 1)
+}
+
+@Test func adoptCopiesAVaultFileButNeverReplacesOne() throws {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let vault = try Vault.create(password: "pw", iterations: 1_000)
+    let source = VaultStorage(url: dir.appendingPathComponent("backup/old.safespace"))
+    try source.write(Vault.encrypt([Entry(title: "kept")], with: vault))
+
+    let storage = VaultStorage(url: dir.appendingPathComponent("Safespace/vault.dat"))
+    try storage.adopt(source.url)
+    #expect(try Vault.decrypt(storage.read(), password: "pw").1.map(\.title) == ["kept"])
+    #expect(throws: VaultError.vaultExists) { try storage.adopt(source.url) }
+
+    let junk = dir.appendingPathComponent("notes.txt")
+    try Data("hello".utf8).write(to: junk)
+    #expect(throws: VaultError.corruptFile) { try VaultStorage(url: dir.appendingPathComponent("other.dat")).adopt(junk) }
+}
+
+@Test func importMergesWithoutLosingAnything() {
+    let work = EntryGroup(name: "Work", color: 0x3B7DD8)
+    let importedWork = EntryGroup(name: " work ", color: 0xD94B3D)
+    let banking = EntryGroup(name: "Banking", color: 0x0B8F57)
+    let shared = Entry(title: "GitHub", password: "a", updatedAt: Date(timeIntervalSince1970: 100))
+    var newerShared = shared
+    newerShared.password = "b"
+    newerShared.updatedAt = Date(timeIntervalSince1970: 200)
+    let current = VaultContents(entries: [shared, Entry(title: "Mail", username: "me", password: "x")], groups: [work])
+    let imported = VaultContents(
+        entries: [
+            newerShared,
+            Entry(title: "Mail", username: "me", password: "x"),  // same login, different id
+            Entry(title: "Bank", password: "y", groupID: banking.id),
+            Entry(title: "Jira", password: "z", groupID: importedWork.id),
+        ],
+        groups: [importedWork, banking]
+    )
+
+    let (merged, summary) = current.merging(imported)
+    #expect(summary == ImportSummary(added: 2, updated: 1, skipped: 1, groupsAdded: 1))
+    #expect(summary.message == "Imported 3 logins · 1 new group · 1 already here")
+    #expect(merged.groups.map(\.name) == ["Work", "Banking"])
+    #expect(merged.entries.count == 4)
+    #expect(merged.entries.first { $0.id == shared.id }?.password == "b")
+    #expect(merged.entries.first { $0.title == "Jira" }?.groupID == work.id)
+    #expect(merged.entries.first { $0.title == "Bank" }?.groupID == banking.id)
+
+    // Importing the same file again changes nothing.
+    let (again, second) = merged.merging(imported)
+    #expect(again == merged)
+    #expect(second.added == 0 && second.updated == 0)
 }

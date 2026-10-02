@@ -7,3 +7,5 @@ xcuserdata/
 .DS_Store
 *.safespace
 *.safespace.bak
+*.dat
+*.dat.bak

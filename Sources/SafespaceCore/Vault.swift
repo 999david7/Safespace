@@ -9,6 +9,7 @@ public enum VaultError: LocalizedError, Equatable {
     case unsupportedVersion(Int)
     case emptyPassword
     case keyDerivationFailed
+    case vaultExists
 
     public var errorDescription: String? {
         switch self {
@@ -17,6 +18,7 @@ public enum VaultError: LocalizedError, Equatable {
         case .unsupportedVersion(let v): "This vault was created by a newer version of Safespace (format \(v))."
         case .emptyPassword: "The master password can't be empty."
         case .keyDerivationFailed: "Couldn't derive the encryption key."
+        case .vaultExists: "A vault already exists on this Mac."
         }
     }
 }

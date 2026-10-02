@@ -13,10 +13,26 @@ use std::time::Duration;
 
 use tauri::{Manager, RunEvent};
 
-/// The vault lives at `%APPDATA%\Safespace\vault.safespace`, next to `vault.safespace.bak`.
+/// The vault lives at `%APPDATA%\Safespace\vault.dat`, next to `vault.dat.bak`.
 fn vault_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     let base = app.path().data_dir().map_err(|e| e.to_string())?;
-    Ok(base.join("Safespace").join("vault.safespace"))
+    Ok(base.join("Safespace").join("vault.dat"))
+}
+
+/// Safespace 1.1 called the vault `vault.safespace`; rename it (and its backup) once.
+fn migrate_legacy_vault(app: &tauri::AppHandle) {
+    let Ok(path) = vault_path(app) else { return };
+    let legacy = path.with_file_name("vault.safespace");
+    if path.exists() || !legacy.is_file() {
+        return;
+    }
+    if fs::rename(&legacy, &path).is_ok() {
+        let legacy_backup = backup_path(&legacy);
+        let backup = backup_path(&path);
+        if legacy_backup.is_file() && !backup.exists() {
+            let _ = fs::rename(legacy_backup, backup);
+        }
+    }
 }
 
 fn backup_path(vault: &PathBuf) -> PathBuf {
@@ -58,6 +74,16 @@ fn write_vault(app: tauri::AppHandle, contents: String) -> Result<(), String> {
         file.sync_all().map_err(fail)?;
     }
     fs::rename(&temp, &path).map_err(fail)
+}
+
+/// First run: makes an existing vault file (already checked by the UI) the vault here.
+/// Never replaces a vault that exists.
+#[tauri::command]
+fn adopt_vault(app: tauri::AppHandle, contents: String) -> Result<(), String> {
+    if vault_path(&app)?.exists() {
+        return Err("A vault already exists on this PC.".into());
+    }
+    write_vault(app, contents)
 }
 
 #[tauri::command]
@@ -144,11 +170,16 @@ fn main() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .manage(ClipboardState { owned: Mutex::new(None), generation: AtomicU64::new(0) })
+        .setup(|app| {
+            migrate_legacy_vault(app.handle());
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             vault_location,
             vault_exists,
             read_vault,
             write_vault,
+            adopt_vault,
             reveal_vault,
             copy_text,
             clear_clipboard,

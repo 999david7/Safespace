@@ -121,15 +121,18 @@ jobs:
             | **Windows 10/11** | **Safespace-Setup.exe** — installs for your user, no admin needed |
             | Windows, no install | Safespace-Portable.exe — needs the WebView2 runtime (built into Windows 11) |
 
-            Both apps read and write the same encrypted vault format, so you can copy `vault.safespace`
+            Both apps read and write the same encrypted vault file, `vault.dat`, so you can copy it
             between a Mac and a PC.
 
             Neither build is code-signed by a paid certificate yet. On macOS right-click the app and choose
             **Open** the first time. On Windows, SmartScreen may say "Windows protected your PC": click
             **More info → Run anyway**.
 
-            ## What's new
+            ## What's new in 1.2
 
-            - New app icon.
-            - **Safespace for Windows**: the same vault desk, generator, groups, health checks, auto-lock
-              and clipboard clearing. Copied passwords are kept out of Windows clipboard history and cloud sync.
+            - The vault is now stored as `vault.dat`. Updating from 1.1 needs nothing: the old
+              `vault.safespace` is renamed automatically on first launch.
+            - **Open an existing vault file…** on the first-run screen uses a vault from a backup or another
+              computer.
+            - **Settings → General → Import logins** merges another vault file into yours (with that file's
+              password). Logins you already have are kept and nothing is duplicated.

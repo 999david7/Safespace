@@ -70,8 +70,19 @@ accents. Dark mode ships with it — toggle it in the header or in Settings → 
 Neither build is signed with a paid certificate yet. On Windows, SmartScreen may say *"Windows
 protected your PC"*: click **More info → Run anyway**. For macOS, see below.
 
-Both apps use the same vault format, so a `vault.safespace` copied from a Mac opens on a PC and the
-other way round. On Windows it lives in `%APPDATA%\Safespace\vault.safespace`.
+Both apps use the same vault format, so a `vault.dat` copied from a Mac opens on a PC and the other
+way round. On Windows it lives in `%APPDATA%\Safespace\vault.dat`.
+
+### Bringing an old vault along
+
+- **New computer, or starting over:** on the *Create your vault* screen choose **Open an existing vault
+  file…** and pick your `vault.dat` (or a `vault.safespace` from Safespace 1.0/1.1, or a `.bak`). It
+  becomes your vault and opens with its own master password.
+- **Already have a vault:** **Settings → General → Import logins** merges another vault file into the
+  one you're using. You type that file's master password; logins you already have are kept and
+  nothing is duplicated, even if you import the same file twice.
+
+Updating from 1.0/1.1 needs nothing: the old `vault.safespace` is renamed to `vault.dat` on first launch.
 
 ### Build from source
 
@@ -129,7 +140,7 @@ scripts/                 app bundling, DMG packing and icon rendering
 windows/                 Safespace for Windows (Tauri): src/ is the UI and a JS port of the core
 ```
 
-The vault file lives at `~/Library/Application Support/Safespace/vault.safespace` and holds JSON
+The vault file lives at `~/Library/Application Support/Safespace/vault.dat` and holds JSON
 with `version`, `kdf`, `iterations`, `salt` and `ciphertext`. The ciphertext is an AES-GCM box
 (nonce ‖ ciphertext ‖ tag); the header fields are authenticated as associated data, so they can't be
 tampered with. Every save uses a fresh nonce, and changing the master password re-encrypts the vault
@@ -184,7 +195,7 @@ Contributions welcome — see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Not included
 
-No sync, no browser autofill, no import/export, no sharing. Those need either a server or a browser
+No sync, no browser autofill, no import from other password managers, no sharing. Those need either a server or a browser
 extension, and both are bigger trust decisions than this app currently asks you to make.
 
 ## License

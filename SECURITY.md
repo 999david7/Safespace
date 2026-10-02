@@ -17,7 +17,7 @@ a week.
 | Encryption | AES-256-GCM (CryptoKit), fresh random nonce on every save |
 | Key derivation | PBKDF2-HMAC-SHA256, 600,000 rounds, 32-byte random salt |
 | Integrity | GCM tag; the file header (version, KDF, iterations, salt) is authenticated as associated data |
-| File | `~/Library/Application Support/Safespace/vault.safespace`, mode `0600`, written atomically, previous version kept as `.bak` |
+| File | `~/Library/Application Support/Safespace/vault.dat` (`%APPDATA%\Safespace\vault.dat` on Windows), mode `0600`, written atomically, previous version kept as `.bak` |
 | Touch ID | Vault key sealed to a Secure Enclave P-256 key created with `.biometryCurrentSet`; unsealed via ECDH → HKDF-SHA256 → AES-GCM after a fingerprint match |
 | Clipboard | Copies are marked `org.nspasteboard.ConcealedType` and cleared on a timer, on lock, and on quit |
 | Network | None. The app makes no network requests and has no sync or telemetry |

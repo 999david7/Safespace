@@ -32,6 +32,8 @@ final class VaultStore {
 
     init(storage: VaultStorage = .default) {
         Preferences.register()
+        // Vaults from Safespace 1.0/1.1 were called vault.safespace; carry them over.
+        try? storage.migrateLegacyFile()
         self.storage = storage
         biometrics = BiometricUnlock(storage: storage)
         state = storage.exists ? .locked : .setup
@@ -59,6 +61,28 @@ final class VaultStore {
             try Vault.decryptContents(file, password: password)
         }.value
         open(vault, contents: contents)
+    }
+
+    /// First run on this Mac: use an existing vault file (a backup, or one from another computer).
+    func adoptVault(from url: URL) throws {
+        guard state == .setup else { return }
+        try storage.adopt(url)
+        suppressBiometricPrompt = true
+        state = .locked
+    }
+
+    /// Adds the logins and groups from another vault file, opened with that file's own password.
+    func importVault(from url: URL, password: String) async throws -> ImportSummary {
+        guard state == .unlocked else { return ImportSummary() }
+        isBusy = true
+        defer { isBusy = false }
+        let file = try VaultStorage(url: url).read()
+        let (_, imported) = try await Task.detached(priority: .userInitiated) {
+            try Vault.decryptContents(file, password: password)
+        }.value
+        let (merged, summary) = VaultContents(entries: entries, groups: groups).merging(imported)
+        try persist(merged.entries, groups: merged.groups)
+        return summary
     }
 
     func unlockWithBiometrics() async throws {
@@ -261,7 +285,7 @@ final class VaultStore {
     /// `SAFESPACE_DEMO=vault|generator|editor|locked|setup`. Never touches the real vault.
     static func demo(screen: String) -> VaultStore {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("safespace-demo-\(UUID().uuidString)")
-        let storage = VaultStorage(url: directory.appendingPathComponent("vault.safespace"))
+        let storage = VaultStorage(url: directory.appendingPathComponent("vault.dat"))
         let vault = try! Vault.create(password: "demo", iterations: 1_000)
         if screen != "setup" {
             try! storage.write(Vault.encrypt(sampleEntries, groups: sampleGroups, with: vault))

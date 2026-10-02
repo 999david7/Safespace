@@ -13,6 +13,8 @@ import {
   generatePassphrase,
   generatePassword,
   hostOf,
+  importMessage,
+  mergeVaults,
   makeEntry,
   passwordEntropy,
   readHeader,
@@ -111,4 +113,32 @@ test("host parsing tolerates missing schemes", () => {
   assert.equal(hostOf("github.com/login"), "github.com");
   assert.equal(hostOf("https://accounts.google.com"), "accounts.google.com");
   assert.equal(hostOf(""), null);
+});
+
+test("import merges without losing anything", () => {
+  const work = { id: "W", name: "Work", color: 1 };
+  const importedWork = { id: "W2", name: " work ", color: 2 };
+  const banking = { id: "B", name: "Banking", color: 3 };
+  const shared = makeEntry({ title: "GitHub", password: "a", updatedAt: 100 });
+  const current = { entries: [shared, makeEntry({ title: "Mail", username: "me", password: "x" })], groups: [work] };
+  const imported = {
+    entries: [
+      { ...shared, password: "b", updatedAt: 200 },
+      makeEntry({ title: "Mail", username: "me", password: "x" }),
+      makeEntry({ title: "Bank", password: "y", groupID: banking.id }),
+      makeEntry({ title: "Jira", password: "z", groupID: importedWork.id }),
+    ],
+    groups: [importedWork, banking],
+  };
+  const merged = mergeVaults(current, imported);
+  assert.deepEqual(merged.summary, { added: 2, updated: 1, skipped: 1, groupsAdded: 1 });
+  assert.equal(importMessage(merged.summary), "Imported 3 logins · 1 new group · 1 already here");
+  assert.deepEqual(merged.groups.map((g) => g.name), ["Work", "Banking"]);
+  assert.equal(merged.entries.find((e) => e.id === shared.id).password, "b");
+  assert.equal(merged.entries.find((e) => e.title === "Jira").groupID, "W");
+  assert.equal(merged.entries.find((e) => e.title === "Bank").groupID, "B");
+
+  const again = mergeVaults(merged, imported);
+  assert.deepEqual(again.summary, { added: 0, updated: 0, skipped: 4, groupsAdded: 0 });
+  assert.deepEqual(again.entries, merged.entries);
 });
