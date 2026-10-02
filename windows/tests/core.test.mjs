@@ -14,6 +14,7 @@ import {
   generatePassword,
   hostOf,
   importMessage,
+  isLegacyVault,
   mergeVaults,
   passwordVariants,
   unlockVault,
@@ -37,30 +38,75 @@ test("encrypt/decrypt round trip keeps entries and groups", async () => {
   assert.equal(opened.vault.iterations, 1_000);
 });
 
+const latin1 = (bytes) => Buffer.from(bytes).toString("latin1");
+
 test("ciphertext does not contain plaintext", async () => {
   const vault = await createVault("pw", 1_000);
-  const text = await encryptVault([makeEntry({ title: "VerySecretTitle", password: "hunter2hunter2" })], [], vault);
+  const text = latin1(await encryptVault([makeEntry({ title: "VerySecretTitle", password: "hunter2hunter2" })], [], vault));
   assert.ok(!text.includes("VerySecretTitle"));
   assert.ok(!text.includes("hunter2"));
 });
 
+test("vault.dat has the binary layout", async () => {
+  const vault = await createVault("pw", 1_000);
+  const bytes = await encryptVault([], [], vault);
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  assert.equal(latin1(bytes.subarray(0, 8)), "SAFESPC\0");
+  assert.equal(view.getUint32(8, true), 1);
+  assert.equal(view.getUint32(12, true), 1_000);
+  assert.deepEqual(bytes.subarray(16, 48), vault.salt);
+  assert.equal(view.getUint32(60, true), bytes.length - 64);
+  assert.equal(isLegacyVault(bytes), false);
+});
+
 test("wrong password and tampering are rejected", async () => {
   const vault = await createVault("right", 1_000);
-  const text = await encryptVault([], [], vault);
-  await assert.rejects(decryptVault(text, "wrong"), { code: "wrongPassword" });
+  const bytes = await encryptVault([], [], vault);
+  await assert.rejects(decryptVault(bytes, "wrong"), { code: "wrongPassword" });
 
-  const file = JSON.parse(text);
-  file.iterations = 2_000; // header is authenticated
-  await assert.rejects(decryptVault(JSON.stringify(file), "right"), { code: "wrongPassword" });
+  // Every header byte is authenticated, and so is the ciphertext.
+  for (const offset of [8, 20, 50, bytes.length - 1]) {
+    const tampered = bytes.slice();
+    tampered[offset] ^= 1;
+    await assert.rejects(decryptVault(tampered, "right"));
+  }
 });
 
 test("newer and malformed files are refused", async () => {
   const vault = await createVault("pw", 1_000);
-  const file = JSON.parse(await encryptVault([], [], vault));
-  await assert.rejects(decryptVault(JSON.stringify({ ...file, version: 2 }), "pw"), { code: "unsupportedVersion" });
+  const bytes = await encryptVault([], [], vault);
+  const newer = bytes.slice();
+  newer[8] = 2;
+  await assert.rejects(decryptVault(newer, "pw"), { code: "unsupportedVersion" });
   await assert.rejects(decryptVault("not json", "pw"), { code: "corruptFile" });
-  await assert.rejects(decryptVault(JSON.stringify({ ...file, kdf: "scrypt" }), "pw"), { code: "corruptFile" });
-  assert.equal(readHeader(JSON.stringify(file)).iterations, 1_000);
+  await assert.rejects(decryptVault(bytes.subarray(0, bytes.length - 1), "pw"), { code: "corruptFile" });
+  assert.equal(readHeader(bytes).iterations, 1_000);
+});
+
+/** A JSON vault as Safespace 1.0–1.2 wrote it. */
+async function legacyVault(password, payload) {
+  const salt = crypto.getRandomValues(new Uint8Array(32));
+  const nonce = crypto.getRandomValues(new Uint8Array(12));
+  const material = await crypto.subtle.importKey("raw", new TextEncoder().encode(password), "PBKDF2", false, ["deriveKey"]);
+  const key = await crypto.subtle.deriveKey({ name: "PBKDF2", hash: "SHA-256", salt, iterations: 1_000 }, material, { name: "AES-GCM", length: 256 }, false, ["encrypt"]);
+  const b64 = (bytes) => Buffer.from(bytes).toString("base64");
+  const additionalData = new TextEncoder().encode(`safespace|1|PBKDF2-HMAC-SHA256|1000|${b64(salt)}`);
+  const sealed = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv: nonce, additionalData }, key, new TextEncoder().encode(JSON.stringify(payload))));
+  const file = { ciphertext: b64(Buffer.concat([nonce, sealed])), iterations: 1_000, kdf: "PBKDF2-HMAC-SHA256", salt: b64(salt), version: 1 };
+  return JSON.stringify(file, null, 2);
+}
+
+test("old JSON vaults still open, as text or bytes, and re-save as binary", async () => {
+  const entry = makeEntry({ title: "Old" });
+  const text = await legacyVault("pw", { entries: [entry] });
+  assert.equal(isLegacyVault(text), true);
+  const opened = await decryptVault(new TextEncoder().encode(text), "pw");
+  assert.deepEqual(opened.entries, [entry]);
+  assert.equal((await decryptVault(text, "pw")).entries[0].title, "Old");
+
+  const resaved = await encryptVault(opened.entries, opened.groups, opened.vault);
+  assert.equal(isLegacyVault(resaved), false);
+  assert.deepEqual((await decryptVault(resaved, "pw")).entries, [entry]);
 });
 
 test("dangling group links are dropped and nil groups are omitted on disk", async () => {

@@ -377,8 +377,8 @@ async function openExistingVault() {
   const file = await pickVaultFile();
   if (!file) return;
   try {
-    core.readHeader(file.text); // refuses anything that isn't a Safespace vault
-    await platform.adoptVault(file.text);
+    core.readHeader(file.data); // refuses anything that isn't a Safespace vault
+    await platform.adoptVault(file.data);
     state.screen = "locked";
     render();
     $("#unlock-message").textContent = `Opened ${file.name}. Enter its master password.`;
@@ -413,11 +413,12 @@ async function unlock() {
   $("#unlock-button").disabled = true;
   $("#unlock-button").textContent = "Unlocking";
   try {
-    const text = await platform.readVault();
+    const contents = await platform.readVault();
     let opened;
     let restoredFrom = null;
+    let legacy = core.isLegacyVault(contents);
     try {
-      opened = await core.unlockVault(text, password);
+      opened = await core.unlockVault(contents, password);
     } catch (error) {
       if (error.code !== "wrongPassword") throw error;
       // The password may belong to an older copy (the backup, or a file left by 1.1).
@@ -425,7 +426,10 @@ async function unlock() {
       if (!fallback) throw error;
       await platform.restoreVault(fallback.contents);
       ({ opened, name: restoredFrom } = fallback);
+      legacy = core.isLegacyVault(fallback.contents);
     }
+    // A JSON vault from Safespace 1.0–1.2 is rewritten in the binary format once it opens.
+    if (legacy) await platform.writeVault(await core.encryptVault(opened.entries, opened.groups, opened.vault));
     state.busy = false;
     openVault(opened);
     if (restoredFrom) {
@@ -1145,7 +1149,7 @@ function openSettings(tab = "general") {
     const file = await pickVaultFile();
     if (!file) return;
     try {
-      core.readHeader(file.text);
+      core.readHeader(file.data);
       importFile = file;
       drawImport();
     } catch (error) {
@@ -1161,7 +1165,7 @@ function openSettings(tab = "general") {
     $("#imp-submit", sheet).disabled = true;
     $("#imp-submit", sheet).textContent = "Importing";
     try {
-      const opened = await core.decryptVault(importFile.text, input.value);
+      const opened = await core.decryptVault(importFile.data, input.value);
       const merged = core.mergeVaults({ entries: state.entries, groups: state.groups }, opened);
       await persist(merged.entries, merged.groups);
       importFile = null;
@@ -1196,8 +1200,7 @@ function openSettings(tab = "general") {
     state.busy = true;
     $("#cp-submit", sheet).disabled = true;
     try {
-      const text = await platform.readVault();
-      await core.decryptVault(text, $("#cp-current", sheet).value);
+      await core.decryptVault(await platform.readVault(), $("#cp-current", sheet).value);
       const vault = await core.createVault($("#cp-new", sheet).value);
       const session = state.session;
       // Write and switch keys inside the queue, so no other save can slip in between with the old key.

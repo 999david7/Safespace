@@ -52,14 +52,14 @@ fn vault_exists(app: tauri::AppHandle) -> Result<bool, String> {
 }
 
 #[tauri::command]
-fn read_vault(app: tauri::AppHandle) -> Result<String, String> {
-    fs::read_to_string(vault_path(&app)?).map_err(|e| format!("Couldn't read the vault: {e}"))
+fn read_vault(app: tauri::AppHandle) -> Result<Vec<u8>, String> {
+    fs::read(vault_path(&app)?).map_err(|e| format!("Couldn't read the vault: {e}"))
 }
 
 /// Older copies that may open when `vault.dat` doesn't: its backup and anything left by 1.1.
 /// Returns `[file name, contents]` pairs, newest first.
 #[tauri::command]
-fn read_vault_fallbacks(app: tauri::AppHandle) -> Result<Vec<(String, String)>, String> {
+fn read_vault_fallbacks(app: tauri::AppHandle) -> Result<Vec<(String, Vec<u8>)>, String> {
     let path = vault_path(&app)?;
     let legacy = path.with_file_name("vault.safespace");
     let mut candidates: Vec<(PathBuf, std::time::SystemTime)> = [backup_path(&path), legacy.clone(), backup_path(&legacy)]
@@ -74,7 +74,7 @@ fn read_vault_fallbacks(app: tauri::AppHandle) -> Result<Vec<(String, String)>, 
         .into_iter()
         .filter_map(|(p, _)| {
             let name = p.file_name()?.to_string_lossy().into_owned();
-            Some((name, fs::read_to_string(&p).ok()?))
+            Some((name, fs::read(&p).ok()?))
         })
         .collect())
 }
@@ -82,7 +82,7 @@ fn read_vault_fallbacks(app: tauri::AppHandle) -> Result<Vec<(String, String)>, 
 /// Moves `vault.dat` aside as `vault.dat.unreadable-<seconds>` (never deleted) and makes
 /// `contents` the vault. Used when an older copy opened but the current file didn't.
 #[tauri::command]
-fn restore_vault(app: tauri::AppHandle, contents: String) -> Result<(), String> {
+fn restore_vault(app: tauri::AppHandle, contents: Vec<u8>) -> Result<(), String> {
     let path = vault_path(&app)?;
     if path.exists() {
         let stamp = std::time::SystemTime::now()
@@ -97,7 +97,7 @@ fn restore_vault(app: tauri::AppHandle, contents: String) -> Result<(), String> 
 
 /// Keeps the previous version as `.bak`, then writes atomically (temp file + rename).
 #[tauri::command]
-fn write_vault(app: tauri::AppHandle, contents: String) -> Result<(), String> {
+fn write_vault(app: tauri::AppHandle, contents: Vec<u8>) -> Result<(), String> {
     let path = vault_path(&app)?;
     let fail = |e: std::io::Error| format!("Couldn't save the vault: {e}");
     fs::create_dir_all(path.parent().expect("vault path has a parent")).map_err(fail)?;
@@ -109,7 +109,7 @@ fn write_vault(app: tauri::AppHandle, contents: String) -> Result<(), String> {
     let temp = PathBuf::from(temp);
     {
         let mut file = fs::File::create(&temp).map_err(fail)?;
-        file.write_all(contents.as_bytes()).map_err(fail)?;
+        file.write_all(&contents).map_err(fail)?;
         file.sync_all().map_err(fail)?;
     }
     fs::rename(&temp, &path).map_err(fail)
@@ -118,7 +118,7 @@ fn write_vault(app: tauri::AppHandle, contents: String) -> Result<(), String> {
 /// First run: makes an existing vault file (already checked by the UI) the vault here.
 /// Never replaces a vault that exists.
 #[tauri::command]
-fn adopt_vault(app: tauri::AppHandle, contents: String) -> Result<(), String> {
+fn adopt_vault(app: tauri::AppHandle, contents: Vec<u8>) -> Result<(), String> {
     if vault_path(&app)?.exists() {
         return Err("A vault already exists on this PC.".into());
     }

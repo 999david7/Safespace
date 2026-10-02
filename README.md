@@ -70,8 +70,9 @@ accents. Dark mode ships with it — toggle it in the header or in Settings → 
 Neither build is signed with a paid certificate yet. On Windows, SmartScreen may say *"Windows
 protected your PC"*: click **More info → Run anyway**. For macOS, see below.
 
-Both apps use the same vault format, so a `vault.dat` copied from a Mac opens on a PC and the other
-way round. On Windows it lives in `%APPDATA%\Safespace\vault.dat`.
+On Windows the vault lives in `%APPDATA%\Safespace\vault.dat`. The Windows app stores it in the binary
+format described under [Vault format](#vault-format); it still opens JSON vaults from the Mac app
+and from older Windows versions, and rewrites them in the binary format the first time they unlock.
 
 ### Bringing an old vault along
 
@@ -145,6 +146,23 @@ with `version`, `kdf`, `iterations`, `salt` and `ciphertext`. The ciphertext is 
 (nonce ‖ ciphertext ‖ tag); the header fields are authenticated as associated data, so they can't be
 tampered with. Every save uses a fresh nonce, and changing the master password re-encrypts the vault
 under a new salt.
+
+#### Vault format
+
+The Windows app writes `vault.dat` as a binary file (all integers little-endian):
+
+| Offset | Size | Field |
+| --- | --- | --- |
+| 0 | 8 | magic `SAFESPC\0` |
+| 8 | 4 | format version (`1`) |
+| 12 | 4 | PBKDF2-HMAC-SHA256 iterations |
+| 16 | 32 | salt |
+| 48 | 12 | AES-GCM nonce |
+| 60 | 4 | length of what follows |
+| 64 | n | ciphertext ‖ 16-byte tag |
+
+The whole 64-byte header is the GCM associated data. The plaintext is the same JSON payload as in the
+JSON format.
 
 Touch ID adds `touchid.enrollment` next to the vault: a Secure Enclave P-256 key created with
 `.biometryCurrentSet`, plus the vault key sealed to it via ECDH → HKDF-SHA256 → AES-GCM. The enclave

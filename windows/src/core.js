@@ -47,8 +47,38 @@ export function fromBase64(text) {
   return Uint8Array.from(binary, (c) => c.charCodeAt(0));
 }
 
-/** The header fields, bound to the ciphertext as authenticated data so they can't be swapped. */
-function associatedData(version, kdf, iterations, salt) {
+/**
+ * vault.dat, Safespace's binary vault file. All integers little-endian:
+ *
+ *   0  magic "SAFESPC\0"      8 bytes
+ *   8  format version         u32
+ *  12  PBKDF2 iterations      u32
+ *  16  salt                   32 bytes
+ *  48  AES-GCM nonce          12 bytes
+ *  60  sealed length          u32
+ *  64  ciphertext ‖ tag       (sealed length) bytes
+ *
+ * The 64-byte header is the GCM authenticated data, so none of it can be changed unnoticed.
+ */
+const MAGIC = encoder.encode("SAFESPC\0");
+const HEADER_LENGTH = 64;
+const TAG_LENGTH = 16;
+
+function isBinaryVault(bytes) {
+  return bytes.length >= MAGIC.length && MAGIC.every((b, i) => bytes[i] === b);
+}
+
+/** Vault files arrive as bytes; old JSON vaults may also be passed as text. */
+function asBytes(data) {
+  if (typeof data === "string") return encoder.encode(data);
+  if (data instanceof Uint8Array) return data;
+  if (data instanceof ArrayBuffer) return new Uint8Array(data);
+  if (Array.isArray(data)) return Uint8Array.from(data);
+  throw corruptFile();
+}
+
+/** The header fields of a JSON vault (Safespace 1.0–1.2), bound to its ciphertext as authenticated data. */
+function legacyAssociatedData(version, kdf, iterations, salt) {
   return encoder.encode(`safespace|${version}|${kdf}|${iterations}|${toBase64(salt)}`);
 }
 
@@ -71,57 +101,90 @@ export async function createVault(password, iterations = DEFAULT_ITERATIONS) {
   return { key: await deriveKey(password, salt, iterations), salt, iterations };
 }
 
-/** Encrypts entries and groups into the JSON file the Mac app writes. */
+/** Encrypts entries and groups into a binary vault.dat (see the layout above). */
 export async function encryptVault(entries, groups, vault) {
   const nonce = crypto.getRandomValues(new Uint8Array(NONCE_LENGTH));
   const plaintext = encoder.encode(JSON.stringify({ entries: entries.map(serializeEntry), groups: groups.map(serializeGroup) }));
-  const sealed = new Uint8Array(
-    await subtle.encrypt(
-      { name: "AES-GCM", iv: nonce, additionalData: associatedData(CURRENT_VERSION, KDF_NAME, vault.iterations, vault.salt) },
-      vault.key,
-      plaintext,
-    ),
-  );
-  // Same layout as CryptoKit's combined box: nonce ‖ ciphertext ‖ tag.
-  const combined = new Uint8Array(nonce.length + sealed.length);
-  combined.set(nonce);
-  combined.set(sealed, nonce.length);
-  const file = {
-    ciphertext: toBase64(combined),
-    iterations: vault.iterations,
-    kdf: KDF_NAME,
-    salt: toBase64(vault.salt),
-    version: CURRENT_VERSION,
-  };
-  return JSON.stringify(file, null, 2);
+  if (vault.salt.length !== SALT_LENGTH) throw corruptFile();
+  const header = new Uint8Array(HEADER_LENGTH);
+  const view = new DataView(header.buffer);
+  header.set(MAGIC, 0);
+  view.setUint32(8, CURRENT_VERSION, true);
+  view.setUint32(12, vault.iterations, true);
+  header.set(vault.salt, 16);
+  header.set(nonce, 48);
+  view.setUint32(60, plaintext.length + TAG_LENGTH, true);
+  const sealed = new Uint8Array(await subtle.encrypt({ name: "AES-GCM", iv: nonce, additionalData: header }, vault.key, plaintext));
+  const file = new Uint8Array(HEADER_LENGTH + sealed.length);
+  file.set(header);
+  file.set(sealed, HEADER_LENGTH);
+  return file;
 }
 
-function parseFile(text) {
+function unsupportedVersion(version) {
+  return new VaultError("unsupportedVersion", `This vault was created by a newer version of Safespace (format ${version}).`);
+}
+
+function parseBinaryFile(bytes) {
+  if (bytes.length < HEADER_LENGTH + TAG_LENGTH) throw corruptFile();
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const version = view.getUint32(8, true);
+  if (version > CURRENT_VERSION) throw unsupportedVersion(version);
+  const iterations = view.getUint32(12, true);
+  const sealedLength = view.getUint32(60, true);
+  if (version < 1 || iterations <= 0 || sealedLength < TAG_LENGTH || HEADER_LENGTH + sealedLength !== bytes.length) throw corruptFile();
+  return {
+    version,
+    iterations,
+    salt: bytes.slice(16, 48),
+    nonce: bytes.slice(48, 60),
+    sealed: bytes.subarray(HEADER_LENGTH),
+    associatedData: bytes.slice(0, HEADER_LENGTH),
+  };
+}
+
+/** A JSON vault written by Safespace 1.0–1.2. Still opened (and imported) so nobody is locked out. */
+function parseLegacyFile(bytes) {
   let file;
   try {
-    file = JSON.parse(text);
+    file = JSON.parse(decoder.decode(bytes));
   } catch {
     throw corruptFile();
   }
   if (!file || typeof file !== "object" || !Number.isInteger(file.version)) throw corruptFile();
-  if (file.version > CURRENT_VERSION) {
-    throw new VaultError("unsupportedVersion", `This vault was created by a newer version of Safespace (format ${file.version}).`);
-  }
+  if (file.version > CURRENT_VERSION) throw unsupportedVersion(file.version);
   const salt = fromBase64(file.salt);
   const ciphertext = fromBase64(file.ciphertext);
   if (file.kdf !== KDF_NAME || salt.length < 16 || !Number.isInteger(file.iterations) || file.iterations <= 0) throw corruptFile();
-  if (ciphertext.length < NONCE_LENGTH + 16) throw corruptFile();
-  return { ...file, salt, ciphertext };
+  if (ciphertext.length < NONCE_LENGTH + TAG_LENGTH) throw corruptFile();
+  return {
+    version: file.version,
+    iterations: file.iterations,
+    salt,
+    nonce: ciphertext.subarray(0, NONCE_LENGTH),
+    sealed: ciphertext.subarray(NONCE_LENGTH),
+    associatedData: legacyAssociatedData(file.version, file.kdf, file.iterations, salt),
+  };
+}
+
+function parseFile(data) {
+  const bytes = asBytes(data);
+  return isBinaryVault(bytes) ? parseBinaryFile(bytes) : parseLegacyFile(bytes);
+}
+
+/** True for a vault in the old JSON format, which the app rewrites as binary once it's unlocked. */
+export function isLegacyVault(data) {
+  return !isBinaryVault(asBytes(data));
 }
 
 /** Reads the KDF parameters without decrypting. */
-export function readHeader(text) {
-  const { salt, iterations } = parseFile(text);
+export function readHeader(data) {
+  const { salt, iterations } = parseFile(data);
   return { salt, iterations };
 }
 
-export async function decryptVault(text, password) {
-  const file = parseFile(text);
+export async function decryptVault(data, password) {
+  const file = parseFile(data);
   const key = await deriveKey(password, file.salt, file.iterations);
   return decryptWithKey(file, key);
 }
@@ -135,11 +198,11 @@ export function passwordVariants(password) {
 }
 
 /** Opens a vault with the password as typed, falling back to its other Unicode forms. */
-export async function unlockVault(text, password) {
+export async function unlockVault(data, password) {
   let lastError;
   for (const candidate of passwordVariants(password)) {
     try {
-      return await decryptVault(text, candidate);
+      return await decryptVault(data, candidate);
     } catch (error) {
       if (error.code !== "wrongPassword") throw error;
       lastError = error;
@@ -151,15 +214,7 @@ export async function unlockVault(text, password) {
 async function decryptWithKey(file, key) {
   let plaintext;
   try {
-    plaintext = await subtle.decrypt(
-      {
-        name: "AES-GCM",
-        iv: file.ciphertext.subarray(0, NONCE_LENGTH),
-        additionalData: associatedData(file.version, file.kdf, file.iterations, file.salt),
-      },
-      key,
-      file.ciphertext.subarray(NONCE_LENGTH),
-    );
+    plaintext = await subtle.decrypt({ name: "AES-GCM", iv: file.nonce, additionalData: file.associatedData }, key, file.sealed);
   } catch {
     // GCM authentication failure: wrong key or tampered data. Indistinguishable by design.
     throw wrongPassword();
